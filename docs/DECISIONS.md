@@ -62,7 +62,9 @@ Serverless peer-to-peer USDt over-the-counter trading / escrow desk.
 - [x] v1 engine: two fan-peers connect (Hyperswarm) + co-sign ticket trade (Autobase) + receipt — DONE, tests green
 - [x] Escrow/trust model + USDt testnet settlement path → docs/DESIGN-escrow.md
 - [x] Public GitHub repo (MIT) → https://github.com/aAAaqwq/terrace
-- [ ] In-app invite flow + writable-state UI (UX P0)
-- [ ] "Forge it & fail" interactive receipt proof (creativity P0)
+- [x] In-app invite flow + writable-state UI (UX P0) — DONE
+- [x] "Forge it & fail" interactive receipt proof (creativity P0) — DONE (GUI tamper→reject + CLI `forge`)
+- [x] Encrypted ledger at rest + proof-of-possession pairing — DONE (new tests green)
+- [ ] (semis) Hyperdrive ticket-handoff + tokenized fan-pass / honest HTLC atomic swap
 - [ ] 3-min demo video → record via docs/DEMO-SCRIPT.md
 - [ ] Submit BUIDL on DoraHacks before 7/8 cut

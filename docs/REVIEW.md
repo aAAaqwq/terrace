@@ -53,7 +53,11 @@ Terrace is structurally novel for the Pears track (financial settlement is white
 1. ✅ Enforce co-signature in `apply()` + forgery test — **done** (turns the central claim into running code).
 2. ✅ Dependency/LICENSE/test hygiene — **done** (bulletproofs the elimination filter).
 3. ✅ Honest use-case reframe (fan-value rail; transferability named) — **done in docs**.
-4. 🔜 In-app invite flow + writable-state UI (UX P0) — biggest remaining demo-quality gap.
-5. 🔜 "Forge it & fail" interactive receipt proof (creativity P0) — the signature, un-copyable moment; now backed by real enforcement.
-6. 🔜 Hyperdrive ticket-handoff (tech P1) + tokenized fan-pass so HTLC atomic swap is honest (real-world P0 for semis).
-7. 💤 dispute-as-third-writer, store encryption, PoP handshake, a11y polish — semifinal polish.
+4. ✅ In-app invite flow + writable-state UI (UX P0) — **done** (host copyable invite panel, join paste field, auth gating; 31/31 Chromium assertions).
+5. ✅ "Forge it & fail" interactive receipt proof (creativity P0) — **done** (tamper→reject in the GUI; also a CLI `forge` command; backed by the enforced ledger).
+6. ✅ Encrypted ledger at rest + proof-of-possession pairing handshake — **done** (privacy flex + anti-spoof/replay; new tests green).
+7. 🔜 Hyperdrive ticket-handoff (tech P1) + tokenized fan-pass so HTLC atomic swap is honest (real-world P0 for semis) — next wave.
+8. 💤 dispute-as-third-writer, a11y polish — semifinal polish.
+
+## Status after optimization wave (2026-07-06)
+Every P0/P1 from this review except the semifinal-scoped Hyperdrive/tokenized-asset work is **shipped and tested**. `npm test` runs both suites green, now covering: author-enforced co-sign, forgery rejection, encrypted-at-rest, no-invite-can't-read, and proof-of-possession. The GUI has a real invite flow, authorization gating, and the forge-and-fail proof. This is a materially stronger submission than the v1 baseline that already passed the genuine-Pears elimination filter.
