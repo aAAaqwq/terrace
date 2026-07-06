@@ -81,6 +81,7 @@ Each prints a green `ALL … TESTS PASSED ✅`.
 ## Docs
 
 - [docs/PITCH.md](docs/PITCH.md) — the story & pitch
+- [docs/HOW-TO-DEMO.md](docs/HOW-TO-DEMO.md) — operator/judge runbook: how to run, demo & verify it live
 - [docs/DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md) — 3-min video script + demo runbook
 - [docs/DESIGN-escrow.md](docs/DESIGN-escrow.md) — escrow trust model + USDt settlement
 - [docs/REVIEW.md](docs/REVIEW.md) — 5-dimension audit + action plan
