@@ -54,6 +54,7 @@ if (!window.TerraceCore) {
     let writable = true;   // host is writable at once; a joiner awaits authorization
     let marketKey = null;  // the shareable invite (ledger bootstrap key)
     const trades = new Map();
+    const passes = new Map(); // listingId -> { hashlock, transferCode, note } (HTLC fan-pass)
 
     const rid = (p) => p + Math.random().toString(36).slice(2, 8);
     const pick = (a) => a[Math.floor(Math.random() * a.length)];
@@ -89,12 +90,28 @@ if (!window.TerraceCore) {
       };
     }
 
+    // Seal a listing as a tokenized fan-pass: fabricate a hashlock and stash the
+    // encrypted transfer code, revealed only once the trade settles (HTLC-style).
+    function attachPass(listing, transferCode, note) {
+      const hashlock = hex(64);
+      passes.set(listing.id, {
+        hashlock,
+        transferCode,
+        note: note || 'Single-use mobile transfer · scan at the turnstile',
+      });
+      return { ...listing, hashlock, pass: { kind: 'terrace-fan-pass', ref: rid('pass_') } };
+    }
+
     // seed a handful of open listings from "other" nations
     function seed() {
       const pool = otherNations();
       listings = Array.from({ length: 5 }, () => makeListing(pick(pool).code));
-      // make the first one a marquee Final
-      listings[0] = { ...listings[0], match: 'ARG vs BRA', _stage: 'Final · Estadio Azteca', priceUsdt: 520 };
+      // make the first one a marquee Final — and seal it with a tokenized fan-pass
+      listings[0] = attachPass(
+        { ...listings[0], match: 'ARG vs BRA', _stage: 'Final · Estadio Azteca', priceUsdt: 520 },
+        'FIFA26-FINAL-' + hex(6).toUpperCase(),
+        'Sealed fan-pass · revealed to the buyer the instant settlement co-signs',
+      );
     }
 
     // drive a trade through offered → cosigned → settled
@@ -183,8 +200,8 @@ if (!window.TerraceCore) {
         return listings.map((l) => ({ ...l }));
       },
 
-      async publishListing({ match, section, seat, priceUsdt, nation }) {
-        const l = {
+      async publishListing({ match, section, seat, priceUsdt, nation, passSecret }) {
+        let l = {
           id: rid('lst_'),
           match, section, seat,
           priceUsdt: Number(priceUsdt),
@@ -194,6 +211,10 @@ if (!window.TerraceCore) {
           status: 'open',
           _stage: 'Listed by you',
         };
+        // If a transfer code was supplied, this listing is a tokenized fan-pass.
+        if (passSecret && String(passSecret).trim()) {
+          l = attachPass(l, String(passSecret).trim(), 'Sealed by you · revealed to the buyer at settlement');
+        }
         listings = [l, ...listings];
         // A remote buyer discovers your ticket and makes an offer.
         setTimeout(() => {
@@ -274,6 +295,8 @@ if (!window.TerraceCore) {
         const t = trades.get(tradeId);
         if (!t) throw new Error('trade gone');
         const l = listings.find((x) => x.id === t.listingId) || {};
+        const p = passes.get(t.listingId) || null;
+        const settled = t.state === 'settled';
         return {
           tradeId,
           match: l.match || '—',
@@ -284,7 +307,53 @@ if (!window.TerraceCore) {
           ledgerHeight,
           hash: hex(40),
           ts: Date.now(),
+          // HTLC fan-pass: null for classic listings, hex hashlock otherwise.
+          hashlock: p ? p.hashlock : null,
+          revealed: p ? settled : false,
+          passUnlocked: p ? settled : false,
         };
+      },
+
+      // HTLC fan-pass state for a trade. Locked (secret sealed) before settlement,
+      // revealed with the transfer code the instant the trade settles — atomically.
+      async getPass(tradeId) {
+        const t = trades.get(tradeId);
+        if (!t) throw new Error('trade gone');
+        const p = passes.get(t.listingId) || null;
+        if (!p) return { hasPass: false, locked: false, revealed: false, hashlock: null, pass: null };
+        if (t.state !== 'settled') {
+          return { hasPass: true, locked: true, revealed: false, hashlock: p.hashlock, pass: null };
+        }
+        const l = listings.find((x) => x.id === t.listingId) || {};
+        return {
+          hasPass: true,
+          locked: false,
+          revealed: true,
+          hashlock: p.hashlock,
+          pass: {
+            kind: 'terrace-fan-pass',
+            match: l.match || '—',
+            section: l.section || '',
+            seat: l.seat || '',
+            transferCode: p.transferCode,
+            note: p.note,
+          },
+        };
+      },
+
+      // For a hashlocked trade the core auto-reveals the secret on settle.
+      async settleTrade(tradeId) {
+        const t = trades.get(tradeId);
+        if (!t) throw new Error('trade gone');
+        if (t.state !== 'settled') {
+          const s = { ...t, state: 'settled' };
+          trades.set(s.id, s);
+          ledgerHeight += 1;
+          const li = listings.find((l) => l.id === s.listingId);
+          if (li) li.status = 'settled';
+          emit('trade', s);
+        }
+        return { ok: true, settled: true };
       },
 
       on(ev, cb) { if (listeners[ev]) listeners[ev].push(cb); },
@@ -307,6 +376,8 @@ const state = {
   trades: new Map(),        // id -> Trade
   offerMeta: new Map(),     // tradeId -> { offerId }  (for acceptOffer)
   receipts: new Map(),      // tradeId -> Receipt
+  passes: new Map(),        // tradeId -> getPass() result (revealed HTLC fan-pass)
+  passUnlockedUI: new Set(),// tradeIds whose LOCKED→UNLOCKED reveal already played
   seenTrades: new Set(),    // tradeIds already toasted at 'offered'
   newBadge: 0,              // unseen settled/trade badge for Trades tab
   // in-app invite + authorization
@@ -821,6 +892,7 @@ function listingCard(l, feature) {
     </div>
     <div class="match">${l.match}</div>
     <div class="stage">${stage}</div>
+    ${l.hashlock ? '<div class="pass-tag">🔒 Tokenized pass</div>' : ''}
     <div class="seatline">
       <span class="seatchip">${l.section}</span>
       <span class="seatchip"><b>${l.seat}</b></span>
@@ -939,6 +1011,25 @@ function renderPublish(view) {
           <input id="f-price" type="number" min="1" step="1" placeholder="240" value="240" required />
           <span class="curmark">USD₮</span>
         </div>
+
+        <div class="pass-toggle-block">
+          <label class="pass-switch" for="f-pass-on">
+            <input type="checkbox" id="f-pass-on" />
+            <span class="ps-track" aria-hidden="true"><span class="ps-thumb"></span></span>
+            <span class="ps-label">
+              <b>🔒 Attach a tokenized fan-pass</b>
+              <span class="ps-sub">Encrypted, delivered peer-to-peer; unlocks only when payment settles — atomically.</span>
+            </span>
+          </label>
+          <div class="pass-secret" id="passSecretWrap" hidden>
+            <label for="f-pass-secret">Transfer code / QR string</label>
+            <input id="f-pass-secret" type="text" spellcheck="false" autocomplete="off"
+              placeholder="e.g. FIFA26-XG7-9K2 · or paste a mobile-transfer QR string" />
+            <p class="pass-secret-note">Sealed under a hashlock the moment you publish. The buyer only ever
+              sees it the instant settlement co-signs — <b>the seller can't be paid without releasing it</b>.</p>
+          </div>
+        </div>
+
         <div class="form-note">
           <span class="flag">${flagOf(state.me.nation)}</span>
           <span>Listed under <b>${nameOf(state.me.nation)}</b> · seller <b>${truncId(state.me.peerId)}</b></span>
@@ -965,12 +1056,22 @@ function renderPublish(view) {
   ['f-match', 'f-section', 'f-seat', 'f-price'].forEach((id) => {
     $('#' + id, form).addEventListener('input', update);
   });
+  const passOn = $('#f-pass-on', form);
+  const passWrap = $('#passSecretWrap', form);
+  const passSecret = $('#f-pass-secret', form);
+  passOn.addEventListener('change', () => {
+    passWrap.hidden = !passOn.checked;
+    if (passOn.checked) setTimeout(() => passSecret.focus(), 40);
+    paintPreview();
+  });
+  passSecret.addEventListener('input', update);
   form.addEventListener('submit', onPublishSubmit);
   gateWrite($('#publishBtn', view));
   paintPreview();
 }
 
 function previewListing() {
+  const passOn = $('#f-pass-on') ? $('#f-pass-on').checked : false;
   return {
     id: 'preview',
     match: $('#f-match') ? $('#f-match').value : MATCH_OPTIONS[0],
@@ -981,6 +1082,8 @@ function previewListing() {
     sellerId: state.me.peerId,
     status: 'open',
     _stage: 'Listed by you',
+    // truthy marker so the preview card shows the 🔒 Tokenized pass badge
+    hashlock: passOn ? 'preview' : null,
   };
 }
 
@@ -1002,21 +1105,34 @@ async function onPublishSubmit(e) {
   const section = $('#f-section').value;
   const seat = ($('#f-seat').value || '').trim();
   const priceUsdt = Number($('#f-price').value);
+  const passOn = $('#f-pass-on') ? $('#f-pass-on').checked : false;
+  const passSecret = passOn ? ($('#f-pass-secret').value || '').trim() : '';
 
   if (!seat || !priceUsdt || priceUsdt <= 0) {
     toast('heat', '⚠️', 'Check your listing', 'Seat and a positive USD₮ price are required.');
+    return;
+  }
+  if (passOn && !passSecret) {
+    toast('heat', '🔒', 'Add a transfer code', 'Attach the pass secret (transfer code / QR string), or turn the fan-pass off.');
     return;
   }
 
   btn.disabled = true;
   btn.innerHTML = 'Broadcasting…';
   try {
-    const listing = await core.publishListing({ match, section, seat, priceUsdt, nation: state.me.nation });
+    const payload = { match, section, seat, priceUsdt, nation: state.me.nation };
+    if (passSecret) payload.passSecret = passSecret; // omit => classic listing (unchanged)
+    const listing = await core.publishListing(payload);
     if (!state.listings.some((l) => l.id === listing.id)) {
       state.listings = [listing, ...state.listings];
     }
-    toast('tether', '📡', `Live on the swarm · <b>${listing.match}</b>`,
-      `${money(listing.priceUsdt)} USD₮ · peers can offer now`);
+    if (listing.hashlock) {
+      toast('tether', '🔒', `Sealed & live · <b>${listing.match}</b>`,
+        `${money(listing.priceUsdt)} USD₮ · pass unlocks atomically on settle`);
+    } else {
+      toast('tether', '📡', `Live on the swarm · <b>${listing.match}</b>`,
+        `${money(listing.priceUsdt)} USD₮ · peers can offer now`);
+    }
     switchTab('market');
   } catch (err) {
     btn.disabled = false;
@@ -1060,6 +1176,18 @@ async function settleTrade(trade) {
   try {
     const receipt = await core.getReceipt(trade.id);
     state.receipts.set(trade.id, receipt);
+    // Hashlocked trade? Settlement just revealed the seller's secret — pull the
+    // now-unlocked fan-pass so the receipt view can play the atomic reveal.
+    if (receipt && receipt.hashlock && typeof core.getPass === 'function') {
+      try {
+        const pass = await core.getPass(trade.id);
+        state.passes.set(trade.id, pass);
+        if (pass && pass.revealed) {
+          toast('tether', '🔓', 'Fan-pass unlocked',
+            'Payment settled → the seller’s secret was revealed → the pass is yours.');
+        }
+      } catch (_) { /* pass optional; receipt still stands */ }
+    }
     toast('tether', '🧾', `Settled · receipt verified`,
       `${money(receipt.priceUsdt)} USD₮ · ledger #${receipt.ledgerHeight}`);
   } catch (err) {
@@ -1096,9 +1224,13 @@ function renderTrades(view) {
     return;
   }
 
-  // hero receipt
+  // hero receipt — with the atomic fan-pass reveal above it when hashlocked
   if (latestReceiptTrade) {
-    wrap.appendChild(receiptHero(state.receipts.get(latestReceiptTrade.id), latestReceiptTrade));
+    const rec = state.receipts.get(latestReceiptTrade.id);
+    if (rec && rec.hashlock) {
+      wrap.appendChild(passRevealPanel(latestReceiptTrade.id, rec));
+    }
+    wrap.appendChild(receiptHero(rec, latestReceiptTrade));
   }
 
   // active + past trades lane
@@ -1118,6 +1250,8 @@ function tradeCard(t) {
 
   const listing = state.listings.find((l) => l.id === t.listingId) || {};
   const match = listing.match || '—';
+  const receipt = state.receipts.get(t.id);
+  const hasPass = !!(listing.hashlock || (receipt && receipt.hashlock));
 
   const stateStep = { offered: 0, cosigned: 1, settled: 2 }[t.state] ?? 0;
   const roleLabel = iAmBuyer ? 'You <b>buy</b>' : iAmSeller ? 'You <b>sell</b>' : 'Observed';
@@ -1129,7 +1263,10 @@ function tradeCard(t) {
         <span class="vs">VS</span>
         <span>${flagOf(t.sellerNation)}</span>
       </div>
-      <span class="state-chip ${t.state}">${t.state}</span>
+      <span class="tc-chips">
+        ${hasPass ? `<span class="tc-pass">${t.state === 'settled' ? '🔓 pass' : '🔒 pass'}</span>` : ''}
+        <span class="state-chip ${t.state}">${t.state}</span>
+      </span>
     </div>
     <div>
       <div class="tc-match">${match}</div>
@@ -1197,6 +1334,103 @@ async function acceptIncoming(t, btn) {
     btn.innerHTML = 'Accept &amp; co-sign <span class="arw">→</span>';
     toast('heat', '⚠️', 'Co-sign failed', String(err.message || err));
   }
+}
+
+/* ---------- THE HERO BEAT: atomic HTLC fan-pass unlock ----------
+   The pass is shown LOCKED first (sealed, hashlock H visible), then — because
+   settlement has already revealed the seller's secret — it animates UNLOCKING
+   to expose the transfer code. Played once per trade (transform/opacity only,
+   reduced-motion honoured via the global media query). */
+function passRevealPanel(tradeId, receipt) {
+  const pass = state.passes.get(tradeId);
+  const unlocked = !!(pass && pass.revealed && pass.pass);
+  const payload = unlocked ? pass.pass : null;
+  const hashHex = (pass && pass.hashlock) || receipt.hashlock || '';
+  const already = state.passUnlockedUI.has(tradeId);
+
+  const transferCode = payload ? payload.transferCode : '';
+  const matchMeta = (payload && payload.match) || receipt.match || '';
+  const seatMeta = payload
+    ? [payload.section, payload.seat].filter(Boolean).join(' · ')
+    : (receipt.seat || '');
+  const note = (payload && payload.note) || '';
+
+  const wrap = el('div', 'pass-reveal');
+  wrap.innerHTML = `
+    <span class="pr-label">Atomic fan-pass · HTLC delivery</span>
+    <div class="pass-card">
+      <div class="pc-aura" aria-hidden="true"></div>
+      <div class="pc-top">
+        <span class="pc-lock" aria-hidden="true">
+          <span class="pc-lock-closed">🔒</span>
+          <span class="pc-lock-open">🔓</span>
+        </span>
+        <div class="pc-hash">
+          <span class="pc-hash-k">Hashlock H</span>
+          <code class="pc-hash-v">${truncHash(hashHex)}</code>
+        </div>
+        <span class="pc-state">
+          <span class="pc-state-locked">Sealed</span>
+          <span class="pc-state-open">Unlocked</span>
+        </span>
+      </div>
+      <div class="pc-body">
+        <div class="pc-sealed">
+          <div class="pc-redacted" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="pc-sealed-sub">encrypted · delivered peer-to-peer · awaiting settlement</div>
+        </div>
+        <div class="pc-open">
+          <div class="pc-open-k">Transfer code · your fan-pass</div>
+          <div class="pc-code-row">
+            <code class="pc-code">${escapeHtml(transferCode || '—')}</code>
+            <button type="button" class="btn sm pc-copy"${transferCode ? '' : ' disabled'}>
+              <span class="pcc-label">Copy code</span>
+            </button>
+          </div>
+          <div class="pc-open-meta">
+            <span>${escapeHtml(matchMeta)}</span>
+            <span>${escapeHtml(seatMeta)}</span>
+            ${note ? `<span>${escapeHtml(note)}</span>` : ''}
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="pr-caption">
+      <b>Payment settled → secret revealed → pass unlocked.</b>
+      One atomic act — the seller couldn't be paid without handing you this.
+    </p>
+  `;
+
+  const copyBtn = $('.pc-copy', wrap);
+  if (copyBtn && transferCode) {
+    copyBtn.addEventListener('click', async () => {
+      const ok = await copyText(transferCode);
+      const lbl = $('.pcc-label', copyBtn);
+      if (ok) {
+        copyBtn.classList.add('copied');
+        if (lbl) lbl.textContent = 'Copied ✓';
+        toast('tether', '📋', 'Pass code copied', 'Your single-use fan-pass transfer code is on the clipboard.');
+        setTimeout(() => { copyBtn.classList.remove('copied'); if (lbl) lbl.textContent = 'Copy code'; }, 2200);
+      } else {
+        toast('heat', '⚠️', 'Copy failed', 'Select the code and copy it manually.');
+      }
+    });
+  }
+
+  if (unlocked && !already) {
+    // First time this settled pass is on screen: seal it, let it read, then break.
+    state.passUnlockedUI.add(tradeId);
+    wrap.classList.add('is-locked');
+    setTimeout(() => {
+      wrap.classList.remove('is-locked');
+      wrap.classList.add('is-unlocked');
+    }, 1250);
+  } else if (unlocked) {
+    wrap.classList.add('is-unlocked'); // already revealed earlier — stay open on re-render
+  } else {
+    wrap.classList.add('is-locked');   // still awaiting settlement
+  }
+  return wrap;
 }
 
 /* ---------- the hero receipt + "Forge it & fail" proof ---------- */
@@ -1372,6 +1606,12 @@ function escapeAttr(s) {
   return String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
     .replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* text-node escaping for values injected via innerHTML (may originate from peers) */
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /* ============================================================
