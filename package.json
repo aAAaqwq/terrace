@@ -1,0 +1,30 @@
+{
+  "name": "terrace",
+  "version": "0.1.0",
+  "description": "Serverless peer-to-peer World Cup fan ticket & asset exchange, settled in USDt. Built on the Pears stack.",
+  "type": "module",
+  "main": "src/app/index.html",
+  "license": "MIT",
+  "scripts": {
+    "peer": "node test/node-peer.js",
+    "test": "node test/ledger.test.js"
+  },
+  "pear": {
+    "name": "terrace",
+    "type": "desktop",
+    "gui": {
+      "backgroundColor": "#0c1021",
+      "height": 760,
+      "width": 1180
+    }
+  },
+  "dependencies": {
+    "autobase": "^7.6.0",
+    "b4a": "^1.6.7",
+    "compact-encoding": "^3.3.0",
+    "corestore": "^7.4.0",
+    "hyperbee": "^2.20.0",
+    "hyperswarm": "^4.11.0",
+    "protomux": "^3.10.4"
+  }
+}

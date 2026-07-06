@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>Terrace — P2P World Cup ticket exchange · USD₮</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <!-- atmosphere layers (floodlights, pitch beams, grain) -->
+  <div class="app-bg" aria-hidden="true"></div>
+
+  <!-- screen 1: onboarding (rendered by ui.js) -->
+  <div id="onboarding" class="onboarding"></div>
+
+  <!-- screens 2-4: app shell + tabbed views (rendered by ui.js) -->
+  <div id="app" class="app hidden"></div>
+
+  <!-- live notifications -->
+  <div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- grain sits above content but below toasts -->
+  <div class="grain" aria-hidden="true"></div>
+
+  <script type="module" src="./ui.js"></script>
+</body>
+</html>
