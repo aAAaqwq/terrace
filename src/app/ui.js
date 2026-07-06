@@ -520,15 +520,18 @@ function renderOnboarding() {
   `;
 
   const grid = $('#nationGrid', root);
-  NATIONS.forEach((n) => {
+  NATIONS.forEach((n, i) => {
     const card = el('button', 'nation');
     card.type = 'button';
     card.setAttribute('role', 'option');
+    card.setAttribute('aria-selected', 'false');
+    card.tabIndex = i === 0 ? 0 : -1; // roving tabindex across the listbox options
     card.dataset.code = n.code;
     card.innerHTML = `<span class="flag">${n.flag}</span><span class="name">${n.name}</span>`;
     card.addEventListener('click', () => selectNation(n.code));
     grid.appendChild(card);
   });
+  grid.addEventListener('keydown', onNationGridKeydown);
 
   root.querySelectorAll('.mode-opt').forEach((b) => {
     b.addEventListener('click', () => selectMode(b.dataset.mode));
@@ -549,11 +552,40 @@ function renderOnboarding() {
 function selectNation(code) {
   state.selectedNation = code;
   document.querySelectorAll('.nation').forEach((c) => {
-    c.classList.toggle('selected', c.dataset.code === code);
-    c.setAttribute('aria-selected', c.dataset.code === code ? 'true' : 'false');
+    const on = c.dataset.code === code;
+    c.classList.toggle('selected', on);
+    c.setAttribute('aria-selected', on ? 'true' : 'false');
+    c.tabIndex = on ? 0 : -1; // keep the chosen option the single tab stop
   });
   $('#pickHint').innerHTML = `Trading under <b>${flagOf(code)} ${nameOf(code)}</b> — ${state.mode === 'join' ? 'paste an invite to join.' : 'ready when you are.'}`;
   updateEnter();
+}
+
+/* Roving keyboard navigation for the nation listbox: arrows move focus across
+   the 4-column grid, Enter/Space chooses — mirrors the listbox/option roles. */
+const NATION_COLS = 4;
+function onNationGridKeydown(e) {
+  const cards = [...document.querySelectorAll('.nation')];
+  const idx = cards.indexOf(document.activeElement);
+  if (idx < 0) return;
+  if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+    e.preventDefault();
+    selectNation(cards[idx].dataset.code);
+    return;
+  }
+  let next = -1;
+  if (e.key === 'ArrowRight') next = Math.min(idx + 1, cards.length - 1);
+  else if (e.key === 'ArrowLeft') next = Math.max(idx - 1, 0);
+  else if (e.key === 'ArrowDown') next = Math.min(idx + NATION_COLS, cards.length - 1);
+  else if (e.key === 'ArrowUp') next = Math.max(idx - NATION_COLS, 0);
+  else if (e.key === 'Home') next = 0;
+  else if (e.key === 'End') next = cards.length - 1;
+  else return;
+  e.preventDefault();
+  if (next === idx) return;
+  cards[idx].tabIndex = -1;
+  cards[next].tabIndex = 0;
+  cards[next].focus();
 }
 
 function selectMode(mode) {
@@ -629,6 +661,10 @@ async function enterSwarm() {
   $('#onboarding').classList.add('hidden');
   $('#app').classList.remove('hidden');
   await bootApp();
+  // The onboarding (and the button that had focus) is now display:none — move
+  // focus into the app so keyboard users aren't stranded on a hidden element.
+  const firstTab = $('#tabs .tab.active') || $('#tabs .tab');
+  if (firstTab) firstTab.focus();
 }
 
 /* ============================================================
@@ -665,25 +701,49 @@ function renderShell() {
         </div>
       </div>
     </header>
-    <nav class="tabs" id="tabs">
-      <button class="tab" data-tab="market">◆ Marketplace</button>
-      <button class="tab" data-tab="publish">＋ List a ticket</button>
-      <button class="tab" data-tab="trades">✓ Trades &amp; receipts <span class="count" id="tradeCount">0</span></button>
+    <nav class="tabs" id="tabs" role="tablist" aria-label="Terrace sections">
+      <button class="tab" data-tab="market" role="tab" id="tab-market" aria-controls="view" aria-selected="false" tabindex="-1">◆ Marketplace</button>
+      <button class="tab" data-tab="publish" role="tab" id="tab-publish" aria-controls="view" aria-selected="false" tabindex="-1">＋ List a ticket</button>
+      <button class="tab" data-tab="trades" role="tab" id="tab-trades" aria-controls="view" aria-selected="false" tabindex="-1">✓ Trades &amp; receipts <span class="count" id="tradeCount">0</span></button>
     </nav>
     <div class="auth-banner" id="authBanner" role="status" aria-live="polite"></div>
-    <main class="view" id="view" aria-live="polite"></main>
+    <main class="view" id="view" role="tabpanel" aria-labelledby="tab-market" tabindex="0" aria-live="polite"></main>
   `;
-  $('#tabs').addEventListener('click', (e) => {
+  const tabsNav = $('#tabs');
+  tabsNav.addEventListener('click', (e) => {
     const t = e.target.closest('.tab');
     if (t) switchTab(t.dataset.tab);
+  });
+  // Left/Right (and Up/Down/Home/End) roving focus across the tablist, with
+  // automatic activation — panels render instantly, so moving focus switches tab.
+  tabsNav.addEventListener('keydown', (e) => {
+    const tabs = [...tabsNav.querySelectorAll('.tab')];
+    const idx = tabs.indexOf(document.activeElement);
+    if (idx < 0) return;
+    let next = -1;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = tabs.length - 1;
+    else return;
+    e.preventDefault();
+    const btn = tabs[next];
+    switchTab(btn.dataset.tab);
+    btn.focus();
   });
 }
 
 function switchTab(tab) {
   state.activeTab = tab;
-  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.tab').forEach((t) => {
+    const on = t.dataset.tab === tab;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+    t.tabIndex = on ? 0 : -1; // roving tabindex: only the active tab is a tab stop
+  });
   if (tab === 'trades') { state.newBadge = 0; updateTradeBadge(); }
   const view = $('#view');
+  view.setAttribute('aria-labelledby', 'tab-' + tab); // panel announces its owning tab
   view.scrollTop = 0;
   if (tab === 'market') renderMarket(view);
   else if (tab === 'publish') renderPublish(view);
@@ -823,7 +883,7 @@ function hostInviteMarkup() {
           co-signed ledger — no server, no link to kill, pure peer-to-peer.</p>
         <div class="ip-key-row">
           <code class="ip-key" id="inviteKey" title="Market bootstrap key">${key}</code>
-          <button type="button" class="btn sm ip-copy" id="copyInvite">
+          <button type="button" class="btn sm ip-copy" id="copyInvite" aria-label="Copy invite key to clipboard">
             <span class="ci-label">Copy invite</span>
           </button>
         </div>
@@ -1400,7 +1460,7 @@ function passRevealPanel(tradeId, receipt) {
           <div class="pc-open-k">Transfer code · your fan-pass</div>
           <div class="pc-code-row">
             <code class="pc-code">${escapeHtml(transferCode || '—')}</code>
-            <button type="button" class="btn sm pc-copy"${transferCode ? '' : ' disabled'}>
+            <button type="button" class="btn sm pc-copy" aria-label="Copy code to clipboard"${transferCode ? '' : ' disabled'}>
               <span class="pcc-label">Copy code</span>
             </button>
           </div>

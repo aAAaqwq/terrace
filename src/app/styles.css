@@ -21,7 +21,11 @@
 
   --chalk:       #eef2e6;
   --chalk-dim:   #98a2bd;
-  --chalk-faint: #616d8c;
+  /* Dimmest tier — lightened from #616d8c (was ≈3.7:1, below AA) so small mono
+     labels clear WCAG AA 4.5:1 on every surface they land on: ≈5.3:1 on --ink-800,
+     ≈5.1:1 on card faces --ink-750, and ≈4.7:1 on --ink-700 toasts. Still far below
+     --chalk-dim (≈7.4:1), so the three-tier chalk hierarchy stays intact. */
+  --chalk-faint: #7c88a4;
 
   /* One confident accent: acid turf lime */
   --turf:      #c7ff3c;
@@ -74,6 +78,12 @@ body {
 }
 
 button { font-family: inherit; }
+
+/* Global keyboard focus ring. Element-specific :focus-visible rules further down
+   (.tab, .nation, .btn, .mode-opt, …) have higher specificity and override this
+   where a bespoke focus treatment already exists — this only backstops anything
+   interactive that lacks one, so keyboard users always see where they are. */
+:focus-visible { outline: 2px solid var(--turf); outline-offset: 2px; }
 
 ::selection { background: var(--turf); color: var(--turf-ink); }
 
