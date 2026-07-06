@@ -23,6 +23,8 @@
   <!-- grain sits above content but below toasts -->
   <div class="grain" aria-hidden="true"></div>
 
+  <!-- bridge injects the real P2P core as window.TerraceCore BEFORE ui.js loads -->
+  <script type="module" src="./bridge.js"></script>
   <script type="module" src="./ui.js"></script>
 </body>
 </html>

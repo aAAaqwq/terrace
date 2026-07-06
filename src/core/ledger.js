@@ -89,6 +89,10 @@ export async function listTrades (base) {
   return collect(base, 'trade/')
 }
 
+export async function listOffers (base) {
+  return collect(base, 'offer/')
+}
+
 export async function getTrade (base, id) {
   const node = await base.view.get(KEY.trade(id))
   return node ? node.value : null

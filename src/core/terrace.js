@@ -14,7 +14,7 @@ import Hyperswarm from 'hyperswarm'
 import b4a from 'b4a'
 import sodium from 'sodium-universal'
 
-import { createLedger, listListings, listTrades, getTrade, getListing } from './ledger.js'
+import { createLedger, listListings, listTrades, listOffers, getTrade, getListing } from './ledger.js'
 import { attachPairing } from './pairing.js'
 
 const TOPIC_CONTEXT = 'terrace:room:1'
@@ -33,6 +33,7 @@ export class TerraceCore {
     this._addedWriters = new Set()
     this._listeners = new Map()
     this._seenListings = new Set()
+    this._seenOffers = new Set()
     this._seenTrades = new Map() // id -> state, to emit on state change
   }
 
@@ -162,7 +163,9 @@ export class TerraceCore {
 
     const trade = {
       type: 'trade',
-      id: randomId(),
+      // Deterministic id shared with the 'offered' event so the UI can
+      // transition one card offered -> cosigned -> settled.
+      id: 't_' + offerId,
       listingId: listing.id,
       offerId,
       buyerId: offer.buyerId,
@@ -243,6 +246,33 @@ export class TerraceCore {
         if (!this._seenListings.has(l.id)) {
           this._seenListings.add(l.id)
           this._emit('listing', stripType(l))
+        }
+      }
+      // Surface incoming offers as an 'offered'-state trade so the seller can
+      // accept (carrying offerId). Stable id ties it to the eventual trade.
+      const offers = await listOffers(this.base)
+      for (const o of offers) {
+        if (this._seenOffers.has(o.id)) continue
+        const listing = await getListing(this.base, o.listingId)
+        if (!listing) continue // listing not replicated yet; retry next update
+        this._seenOffers.add(o.id)
+        const tid = 't_' + o.id
+        if (!this._seenTrades.has(tid)) {
+          this._seenTrades.set(tid, 'offered')
+          this._emit('trade', {
+            id: tid,
+            offerId: o.id,
+            listingId: listing.id,
+            buyerId: o.buyerId,
+            sellerId: listing.sellerId,
+            buyerNation: o.buyerNation,
+            sellerNation: listing.nation,
+            match: listing.match,
+            seat: listing.seat,
+            priceUsdt: listing.priceUsdt,
+            state: 'offered',
+            ts: o.ts
+          })
         }
       }
       const trades = await listTrades(this.base)
