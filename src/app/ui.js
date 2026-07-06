@@ -51,6 +51,8 @@ if (!window.TerraceCore) {
     let ledgerHeight = 4128;
     let peerCount = 0;
     let listings = [];
+    let writable = true;   // host is writable at once; a joiner awaits authorization
+    let marketKey = null;  // the shareable invite (ledger bootstrap key)
     const trades = new Map();
 
     const rid = (p) => p + Math.random().toString(36).slice(2, 8);
@@ -124,9 +126,15 @@ if (!window.TerraceCore) {
     }
 
     return {
-      async start({ nation }) {
+      // invite present => joining an existing market (must await host
+      // authorization before becoming a writer); absent => hosting a new one.
+      async start({ nation, invite } = {}) {
+        const joining = !!(invite && /^[0-9a-f]{64}$/i.test(String(invite)));
         me = { peerId: rid('you_'), nation };
+        marketKey = joining ? String(invite).toLowerCase() : hex(64);
+        writable = !joining; // a joiner is not yet a co-writer
         seed();
+
         // simulate the swarm filling up
         setTimeout(() => {
           const joins = 3 + Math.floor(Math.random() * 4);
@@ -136,12 +144,21 @@ if (!window.TerraceCore) {
             peerCount += 1;
             const n = pick(otherNations());
             emit('peer', { peerId: rid('peer_'), nation: n.code, count: peerCount });
-            emit('status', { connected: true, peers: peerCount });
+            emit('status', { connected: true, peers: peerCount, writable });
             setTimeout(tick, 500 + Math.random() * 700);
           };
-          emit('status', { connected: true, peers: 0 });
+          emit('status', { connected: true, peers: 0, writable });
           tick();
         }, 350);
+
+        // a joiner gets authorized as a co-writer by the host shortly after
+        // pairing — this is the ~20s block the real core can impose, compressed.
+        if (joining) {
+          setTimeout(() => {
+            writable = true;
+            emit('status', { connected: true, peers: peerCount, writable: true });
+          }, 3400 + Math.random() * 900);
+        }
 
         // periodically, a new listing floats in from a peer
         setInterval(() => {
@@ -152,7 +169,14 @@ if (!window.TerraceCore) {
           emit('listing', l);
         }, 9000 + Math.random() * 4000);
 
-        return { peerId: me.peerId, nation: me.nation };
+        return {
+          peerId: me.peerId,
+          nation: me.nation,
+          bootstrap: marketKey,
+          invite: marketKey,
+          isHost: !joining,
+          writable
+        };
       },
 
       async getListings() {
@@ -285,6 +309,13 @@ const state = {
   receipts: new Map(),      // tradeId -> Receipt
   seenTrades: new Set(),    // tradeIds already toasted at 'offered'
   newBadge: 0,              // unseen settled/trade badge for Trades tab
+  // in-app invite + authorization
+  mode: 'host',             // onboarding: 'host' | 'join'
+  inviteInput: '',          // pasted invite (join mode)
+  isHost: true,             // resolved after start()
+  invite: null,             // this market's shareable key
+  writable: true,           // may I write to the ledger yet?
+  justAuthorized: false,    // transient success flag for the auth banner
 };
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -297,6 +328,52 @@ const el = (tag, cls, html) => {
 const truncId = (id) => (id ? id.slice(0, 4) + '…' + id.slice(-4) : '—');
 const truncHash = (h) => (h ? '0x' + h.slice(0, 10) + '…' + h.slice(-6) : '—');
 const money = (n) => Number(n).toLocaleString('en-US');
+
+const HEX64 = /^[0-9a-f]{64}$/i;
+const isHex64 = (s) => typeof s === 'string' && HEX64.test(s.trim());
+
+/* Copy to clipboard with a Bare/Pear-safe fallback. */
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) { /* fall through to legacy path */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (_) { return false; }
+}
+
+/* Deterministic content fingerprint over the human-readable receipt fields.
+   Pure JS (FNV-1a x2 => 16 hex chars) so tampering ANY visible field yields a
+   different fingerprint than the one anchored at settlement. Never fakes a pass. */
+function fnv1a(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0);
+}
+function receiptFingerprint(f) {
+  const canon = [
+    f.match, f.seat, String(f.priceUsdt),
+    f.buyerNation, f.sellerNation, String(f.ledgerHeight), String(f.hash),
+  ].join('␟');
+  const a = fnv1a(canon);
+  const b = fnv1a(canon + '::' + a.toString(16));
+  return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0');
+}
 
 /* ============================================================
    ONBOARDING
@@ -335,9 +412,35 @@ function renderOnboarding() {
         <span class="step">16 sides · live</span>
       </div>
       <div class="nation-grid" id="nationGrid" role="listbox" aria-label="Choose your nation"></div>
+
+      <div class="mode-block">
+        <span class="kicker" style="margin-bottom:12px">Step 02 · Open or enter a market</span>
+        <div class="mode-seg" role="tablist" aria-label="Host a new market or join with an invite">
+          <button type="button" class="mode-opt selected" data-mode="host" role="tab" aria-selected="true">
+            <span class="mo-ico">✦</span>
+            <span class="mo-t">Host a new market</span>
+            <span class="mo-d">Open a fresh co-signed ledger, then share the invite</span>
+          </button>
+          <button type="button" class="mode-opt" data-mode="join" role="tab" aria-selected="false">
+            <span class="mo-ico">⤵</span>
+            <span class="mo-t">Join with an invite</span>
+            <span class="mo-d">Paste a friend's 64-character market key</span>
+          </button>
+        </div>
+        <div class="invite-entry" id="inviteEntry" hidden>
+          <label for="inviteInput">Market invite key</label>
+          <div class="invite-input-row" id="inviteInputRow">
+            <input id="inviteInput" type="text" spellcheck="false" autocomplete="off"
+              inputmode="latin" placeholder="paste the 64-character hex invite…" aria-describedby="inviteNote" />
+            <span class="invite-flag" id="inviteFlag" aria-hidden="true"></span>
+          </div>
+          <p class="invite-note" id="inviteNote">64 hex characters (0–9, a–f). Ask the host to send you theirs.</p>
+        </div>
+      </div>
+
       <div class="pick-foot">
         <button class="btn" id="enterBtn" disabled>
-          Enter the swarm <span class="arw">→</span>
+          <span id="enterLabel">Host the market</span> <span class="arw">→</span>
         </button>
         <span class="hint" id="pickHint">Choose the colours you'll trade under.</span>
       </div>
@@ -355,6 +458,19 @@ function renderOnboarding() {
     grid.appendChild(card);
   });
 
+  root.querySelectorAll('.mode-opt').forEach((b) => {
+    b.addEventListener('click', () => selectMode(b.dataset.mode));
+  });
+  const inviteInput = $('#inviteInput', root);
+  inviteInput.addEventListener('input', () => {
+    state.inviteInput = inviteInput.value;
+    validateInvite();
+    updateEnter();
+  });
+  inviteInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !$('#enterBtn').disabled) enterSwarm();
+  });
+
   $('#enterBtn', root).addEventListener('click', enterSwarm);
 }
 
@@ -364,22 +480,77 @@ function selectNation(code) {
     c.classList.toggle('selected', c.dataset.code === code);
     c.setAttribute('aria-selected', c.dataset.code === code ? 'true' : 'false');
   });
+  $('#pickHint').innerHTML = `Trading under <b>${flagOf(code)} ${nameOf(code)}</b> — ${state.mode === 'join' ? 'paste an invite to join.' : 'ready when you are.'}`;
+  updateEnter();
+}
+
+function selectMode(mode) {
+  state.mode = mode;
+  document.querySelectorAll('.mode-opt').forEach((b) => {
+    const on = b.dataset.mode === mode;
+    b.classList.toggle('selected', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const entry = $('#inviteEntry');
+  if (entry) entry.hidden = mode !== 'join';
+  const label = $('#enterLabel');
+  if (label) label.textContent = mode === 'join' ? 'Join the market' : 'Host the market';
+  if (mode === 'join') {
+    const inp = $('#inviteInput');
+    if (inp) setTimeout(() => inp.focus(), 40);
+    validateInvite();
+  }
+  updateEnter();
+}
+
+function validateInvite() {
+  const row = $('#inviteInputRow');
+  const flag = $('#inviteFlag');
+  const note = $('#inviteNote');
+  if (!row || !flag || !note) return;
+  const v = (state.inviteInput || '').trim();
+  if (v.length === 0) {
+    row.classList.remove('ok', 'bad');
+    flag.textContent = '';
+    note.textContent = '64 hex characters (0–9, a–f). Ask the host to send you theirs.';
+    return;
+  }
+  if (isHex64(v)) {
+    row.classList.add('ok'); row.classList.remove('bad');
+    flag.textContent = '✓';
+    note.innerHTML = 'Valid market key — <b>ready to join</b>.';
+  } else {
+    row.classList.add('bad'); row.classList.remove('ok');
+    flag.textContent = '✕';
+    note.textContent = `Not a valid key yet — ${v.length}/64 hex chars.`;
+  }
+}
+
+function updateEnter() {
   const btn = $('#enterBtn');
-  btn.disabled = false;
-  $('#pickHint').innerHTML = `Trading under <b>${flagOf(code)} ${nameOf(code)}</b> — ready when you are.`;
+  if (!btn) return;
+  const ready = !!state.selectedNation && (state.mode === 'host' || isHex64(state.inviteInput));
+  btn.disabled = !ready;
 }
 
 async function enterSwarm() {
   if (!state.selectedNation) return;
+  const joining = state.mode === 'join';
+  const invite = joining ? (state.inviteInput || '').trim().toLowerCase() : null;
+  if (joining && !isHex64(invite)) return;
+
   const btn = $('#enterBtn');
   btn.disabled = true;
-  btn.innerHTML = 'Joining the DHT… <span class="arw">◍</span>';
+  btn.innerHTML = `${joining ? 'Joining the market' : 'Opening the market'}… <span class="arw">◍</span>`;
   try {
-    const res = await core.start({ nation: state.selectedNation });
+    const res = await core.start({ nation: state.selectedNation, invite });
     state.me = { peerId: res.peerId, nation: res.nation };
+    state.isHost = res.isHost != null ? !!res.isHost : !invite;
+    state.invite = res.invite || res.bootstrap || window.__TERRACE_INVITE__ || invite || null;
+    state.writable = res.writable !== undefined ? !!res.writable : true;
   } catch (err) {
     btn.disabled = false;
-    btn.textContent = 'Retry';
+    btn.innerHTML = 'Retry <span class="arw">→</span>';
     toast('heat', '⚠️', 'Could not join the swarm', String(err.message || err));
     return;
   }
@@ -394,6 +565,7 @@ async function enterSwarm() {
 async function bootApp() {
   renderShell();
   wireCoreEvents();
+  updateAuthState();
   await loadListings();
   switchTab('market');
 }
@@ -404,6 +576,10 @@ function renderShell() {
     <header class="topbar">
       <span class="wordmark"><span class="dot"></span>Terrace<sup>P2P</sup></span>
       <div class="topbar-right">
+        <div class="role-badge ${state.isHost ? 'host' : 'guest'}" id="roleBadge"
+          title="${state.isHost ? 'You opened this market' : 'You joined via invite'}">
+          <span class="rb-dot"></span>${state.isHost ? 'Host' : 'Guest'}
+        </div>
         <div class="status" id="statusPill" title="Live swarm status">
           <span class="live"></span>
           <span><span class="full">Connecting to swarm…</span></span>
@@ -422,6 +598,7 @@ function renderShell() {
       <button class="tab" data-tab="publish">＋ List a ticket</button>
       <button class="tab" data-tab="trades">✓ Trades &amp; receipts <span class="count" id="tradeCount">0</span></button>
     </nav>
+    <div class="auth-banner" id="authBanner" role="status" aria-live="polite"></div>
     <main class="view" id="view" aria-live="polite"></main>
   `;
   $('#tabs').addEventListener('click', (e) => {
@@ -445,9 +622,10 @@ function switchTab(tab) {
    CORE EVENT WIRING
    ============================================================ */
 function wireCoreEvents() {
-  core.on('status', ({ connected, peers }) => {
+  core.on('status', ({ connected, peers, writable }) => {
     state.connected = connected;
     if (typeof peers === 'number') state.peers = peers;
+    if (typeof writable === 'boolean') setWritable(writable);
     updateStatusPill();
   });
   core.on('peer', ({ nation, count }) => {
@@ -479,6 +657,58 @@ function updateTradeBadge() {
   c.classList.toggle('show', state.newBadge > 0);
 }
 
+/* ---------- writable / authorization ---------- */
+function setWritable(next) {
+  if (next === state.writable) return;
+  const gainedAccess = next && !state.writable;
+  state.writable = next;
+  if (gainedAccess) {
+    state.justAuthorized = true;
+    toast('tether', '✓', 'Authorized as a co-writer',
+      'The host added your key to the ledger — publish, offer & co-sign are live.');
+    setTimeout(() => { state.justAuthorized = false; updateAuthState(); }, 6000);
+  }
+  updateAuthState();
+  // rebuild the active view so gated controls reflect the new permission
+  if (state.activeTab === 'market') paintListings();
+  else if (state.activeTab === 'publish') renderPublish($('#view'));
+  else if (state.activeTab === 'trades') renderTrades($('#view'));
+}
+
+function updateAuthState() {
+  const banner = $('#authBanner');
+  if (!banner) return;
+  if (!state.writable) {
+    banner.className = 'auth-banner show waiting';
+    banner.innerHTML = `
+      <span class="ab-spin" aria-hidden="true"></span>
+      <div class="ab-copy">
+        <b>Getting authorized as a co-writer…</b>
+        <span class="ab-sub">The host is adding your key to the shared ledger. Publishing, offers and co-signing unlock automatically — no need to click and wait.</span>
+      </div>`;
+  } else if (state.justAuthorized) {
+    banner.className = 'auth-banner show ok';
+    banner.innerHTML = `
+      <span class="ab-check" aria-hidden="true">✓</span>
+      <div class="ab-copy">
+        <b>Authorized — you're a co-signer on the ledger</b>
+        <span class="ab-sub">Every trade you touch is now signed by your key. You can publish, offer and co-sign.</span>
+      </div>`;
+  } else {
+    banner.className = 'auth-banner';
+    banner.innerHTML = '';
+  }
+}
+
+/* Disable a write action until the ledger authorizes us. Returns true if OK. */
+function gateWrite(btn) {
+  if (state.writable) return true;
+  btn.disabled = true;
+  btn.classList.add('locked');
+  btn.title = 'Waiting for the host to authorize you as a co-writer…';
+  return false;
+}
+
 /* ============================================================
    MARKETPLACE
    ============================================================ */
@@ -493,6 +723,7 @@ async function loadListings() {
 
 function renderMarket(view) {
   view.innerHTML = `
+    ${state.isHost && state.invite ? hostInviteMarkup() : ''}
     <div class="sec-head">
       <div class="titles">
         <span class="kicker">Live order book · direct from peers</span>
@@ -503,7 +734,53 @@ function renderMarket(view) {
     <div class="market-grid" id="marketGrid"></div>
   `;
   $('#toPublish', view).addEventListener('click', () => switchTab('publish'));
+  wireHostInvite(view);
   paintListings();
+}
+
+/* ---------- host invite share panel ---------- */
+function hostInviteMarkup() {
+  const key = state.invite;
+  return `
+    <section class="invite-panel" aria-label="Your market invite">
+      <div class="ip-glow" aria-hidden="true"></div>
+      <div class="ip-main">
+        <span class="ip-kicker">You're hosting · share to fill your terrace</span>
+        <h3>Your market invite</h3>
+        <p class="ip-lede">Send this key to a friend. They paste it into <b>Join with an invite</b> to enter your
+          co-signed ledger — no server, no link to kill, pure peer-to-peer.</p>
+        <div class="ip-key-row">
+          <code class="ip-key" id="inviteKey" title="Market bootstrap key">${key}</code>
+          <button type="button" class="btn sm ip-copy" id="copyInvite">
+            <span class="ci-label">Copy invite</span>
+          </button>
+        </div>
+        <div class="ip-foot">
+          <span class="ip-chip">🔑 64-hex bootstrap key</span>
+          <span class="ip-chip">✍️ you authorize each co-writer</span>
+        </div>
+      </div>
+    </section>`;
+}
+
+function wireHostInvite(view) {
+  const btn = $('#copyInvite', view);
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const ok = await copyText(state.invite);
+    const label = $('.ci-label', btn);
+    if (ok) {
+      btn.classList.add('copied');
+      if (label) label.textContent = 'Copied ✓';
+      toast('tether', '📋', 'Invite copied', 'Share it P2P — the joiner pastes it to enter your market.');
+      setTimeout(() => {
+        btn.classList.remove('copied');
+        if (label) label.textContent = 'Copy invite';
+      }, 2200);
+    } else {
+      toast('heat', '⚠️', 'Copy failed', 'Select the key and copy it manually.');
+    }
+  });
 }
 
 function paintListings() {
@@ -564,8 +841,11 @@ function listingCard(l, feature) {
     slot.innerHTML = '<span class="role-chip">listed by <b>you</b></span>';
   } else if (l.status === 'open') {
     const btn = el('button', 'btn sm');
-    btn.innerHTML = 'Make offer <span class="arw">→</span>';
+    btn.innerHTML = state.writable
+      ? 'Make offer <span class="arw">→</span>'
+      : '🔒 Awaiting access';
     btn.addEventListener('click', () => makeOffer(l, btn));
+    gateWrite(btn);
     slot.appendChild(btn);
   } else if (l.status === 'pending') {
     slot.innerHTML = '<span class="role-chip">co-signing…</span>';
@@ -596,6 +876,10 @@ function onNewListing(listing) {
 }
 
 async function makeOffer(listing, btn) {
+  if (!state.writable) {
+    toast('heat', '🔒', 'Not authorized yet', 'The host must add you as a co-writer before you can offer.');
+    return;
+  }
   btn.disabled = true;
   btn.innerHTML = 'Signing offer…';
   try {
@@ -659,8 +943,13 @@ function renderPublish(view) {
           <span class="flag">${flagOf(state.me.nation)}</span>
           <span>Listed under <b>${nameOf(state.me.nation)}</b> · seller <b>${truncId(state.me.peerId)}</b></span>
         </div>
+        ${state.writable ? '' : `
+        <div class="gate-note" role="status">
+          <span class="ab-spin" aria-hidden="true"></span>
+          <span>Getting authorized as a co-writer… publishing unlocks the moment the host adds your key.</span>
+        </div>`}
         <button type="submit" class="btn block" id="publishBtn">
-          Publish to the swarm <span class="arw">→</span>
+          ${state.writable ? 'Publish to the swarm <span class="arw">→</span>' : '🔒 Awaiting co-writer access'}
         </button>
       </form>
 
@@ -677,6 +966,7 @@ function renderPublish(view) {
     $('#' + id, form).addEventListener('input', update);
   });
   form.addEventListener('submit', onPublishSubmit);
+  gateWrite($('#publishBtn', view));
   paintPreview();
 }
 
@@ -704,6 +994,10 @@ function paintPreview() {
 async function onPublishSubmit(e) {
   e.preventDefault();
   const btn = $('#publishBtn');
+  if (!state.writable) {
+    toast('heat', '🔒', 'Not authorized yet', 'The host must add you as a co-writer before you can publish.');
+    return;
+  }
   const match = $('#f-match').value;
   const section = $('#f-section').value;
   const seat = ($('#f-seat').value || '').trim();
@@ -860,8 +1154,11 @@ function tradeCard(t) {
   const action = $('.tc-action', card);
   if (incoming) {
     const btn = el('button', 'btn block sm');
-    btn.innerHTML = 'Accept &amp; co-sign <span class="arw">→</span>';
+    btn.innerHTML = state.writable
+      ? 'Accept &amp; co-sign <span class="arw">→</span>'
+      : '🔒 Awaiting co-writer access';
     btn.addEventListener('click', () => acceptIncoming(t, btn));
+    gateWrite(btn);
     action.appendChild(btn);
   } else if (t.state === 'settled' && state.receipts.has(t.id)) {
     const btn = el('button', 'btn ghost block sm');
@@ -879,6 +1176,10 @@ function tradeCard(t) {
 }
 
 async function acceptIncoming(t, btn) {
+  if (!state.writable) {
+    toast('heat', '🔒', 'Not authorized yet', 'The host must add you as a co-writer before you can co-sign.');
+    return;
+  }
   const meta = state.offerMeta.get(t.id);
   const offerId = meta ? meta.offerId : t.offerId;
   if (!offerId) {
@@ -898,14 +1199,29 @@ async function acceptIncoming(t, btn) {
   }
 }
 
-/* ---------- the hero receipt ---------- */
+/* ---------- the hero receipt + "Forge it & fail" proof ---------- */
 function receiptHero(r, trade) {
   const iAmBuyer = state.me && trade.buyerId === state.me.peerId;
+
+  // Pristine, ledger-anchored field-set + its content fingerprint. Re-verify
+  // recomputes over what's on screen and compares to this — tampering any
+  // visible field breaks the match. Never fakes a pass.
+  const pristine = {
+    match: r.match,
+    seat: r.seat,
+    priceUsdt: Number(r.priceUsdt),
+    buyerNation: r.buyerNation,
+    sellerNation: r.sellerNation,
+    ledgerHeight: r.ledgerHeight,
+    hash: String(r.hash || ''),
+  };
+  const genuineFp = receiptFingerprint(pristine);
+
   const wrap = el('div', 'receipt-hero');
   wrap.innerHTML = `
     <span class="rh-label">Verifiable receipt · latest settlement</span>
-    <div class="receipt">
-      <div class="stamp">Verified</div>
+    <div class="receipt" data-state="verified">
+      <div class="stamp"><span class="stamp-ok">Verified</span><span class="stamp-bad">Invalid</span></div>
       <div class="receipt-body">
         <div class="receipt-head">
           <div class="r-title">${r.match}</div>
@@ -925,8 +1241,8 @@ function receiptHero(r, trade) {
           </div>
         </div>
         <div class="receipt-amount">
-          <span class="num">${money(r.priceUsdt)}</span><span class="cur">USD₮</span>
-          <div class="what">settled peer-to-peer · seat ${r.seat}</div>
+          <span class="num" data-field="price" spellcheck="false">${money(pristine.priceUsdt)}</span><span class="cur">USD₮</span>
+          <div class="what">settled peer-to-peer · co-signed by two fans</div>
         </div>
       </div>
       <div class="perf"><span class="notch l"></span><span class="notch r"></span></div>
@@ -937,11 +1253,11 @@ function receiptHero(r, trade) {
         </div>
         <div class="cell">
           <div class="k">Seat</div>
-          <div class="v">${r.seat}</div>
+          <input class="v r-edit" data-field="seat" value="${escapeAttr(pristine.seat)}" readonly spellcheck="false" aria-label="Seat" />
         </div>
         <div class="cell wide">
           <div class="k">Autobase hash</div>
-          <div class="v hash">${truncHash(r.hash)}</div>
+          <input class="v hash r-edit" data-field="hash" value="${escapeAttr(pristine.hash)}" readonly spellcheck="false" aria-label="Autobase hash" />
         </div>
       </div>
       <div class="barcode"></div>
@@ -950,8 +1266,112 @@ function receiptHero(r, trade) {
         <p>No server. <b>No scalper.</b> Co-signed peer-to-peer.</p>
       </div>
     </div>
+
+    <div class="forge">
+      <div class="forge-head">
+        <span class="forge-kicker">The un-copyable part</span>
+        <h4>Forge it. Go ahead.</h4>
+        <p>This receipt was <b>co-signed by two fans in two countries</b>. Change one character of
+          the price, the seat, or the hash and try to make it verify against the ledger — <b>you can't</b>.</p>
+      </div>
+      <div class="forge-readout">
+        <div class="fr-row"><span class="fr-k">Ledger fingerprint</span><code class="fr-v" data-fp="ledger">${genuineFp}</code></div>
+        <div class="fr-row"><span class="fr-k">Recomputed now</span><code class="fr-v" data-fp="now">${genuineFp}</code></div>
+        <div class="fr-verdict ok" data-verdict>✓ Co-signature intact — matches the ledger</div>
+      </div>
+      <div class="forge-actions">
+        <button type="button" class="btn ghost sm" data-act="tamper">✎ Tamper this receipt</button>
+        <button type="button" class="btn sm" data-act="verify" hidden>Re-verify against ledger <span class="arw">→</span></button>
+        <button type="button" class="btn ghost sm" data-act="reset" hidden>Reset</button>
+      </div>
+    </div>
   `;
+
+  const receipt = $('.receipt', wrap);
+  const priceEl = $('[data-field="price"]', wrap);
+  const seatEl = $('[data-field="seat"]', wrap);
+  const hashEl = $('[data-field="hash"]', wrap);
+  const fpNow = $('[data-fp="now"]', wrap);
+  const verdict = $('[data-verdict]', wrap);
+  const tamperBtn = $('[data-act="tamper"]', wrap);
+  const verifyBtn = $('[data-act="verify"]', wrap);
+  const resetBtn = $('[data-act="reset"]', wrap);
+
+  const readCurrent = () => ({
+    ...pristine,
+    priceUsdt: (priceEl.textContent || '').replace(/[^\d.]/g, '') || '0',
+    seat: seatEl.value,
+    hash: hashEl.value,
+  });
+
+  const refreshFp = () => {
+    const fp = receiptFingerprint(readCurrent());
+    fpNow.textContent = fp;
+    fpNow.classList.toggle('drift', fp !== genuineFp);
+  };
+
+  const setEditing = (on) => {
+    priceEl.setAttribute('contenteditable', on ? 'true' : 'false');
+    priceEl.classList.toggle('editable', on);
+    seatEl.readOnly = !on;
+    hashEl.readOnly = !on;
+    seatEl.classList.toggle('editable', on);
+    hashEl.classList.toggle('editable', on);
+    tamperBtn.hidden = on;
+    verifyBtn.hidden = !on;
+    resetBtn.hidden = !on;
+  };
+
+  const setVerdict = (kind, msg, fp) => {
+    receipt.dataset.state = kind === 'ok' ? 'verified' : 'rejected';
+    verdict.className = 'fr-verdict ' + (kind === 'ok' ? 'ok' : 'bad');
+    verdict.textContent = msg;
+    if (fp) fpNow.textContent = fp;
+  };
+
+  tamperBtn.addEventListener('click', () => {
+    setEditing(true);
+    verdict.className = 'fr-verdict pending';
+    verdict.textContent = 'Editing — change a character, then re-verify against the ledger.';
+    receipt.dataset.state = 'editing';
+    priceEl.focus();
+  });
+
+  [priceEl].forEach((n) => n.addEventListener('input', refreshFp));
+  [seatEl, hashEl].forEach((n) => n.addEventListener('input', refreshFp));
+
+  verifyBtn.addEventListener('click', () => {
+    const cur = readCurrent();
+    const fp = receiptFingerprint(cur);
+    const tampered = fp !== genuineFp;
+    if (tampered) {
+      setVerdict('bad', '✕ REJECTED — this receipt was never co-signed. The fingerprint no longer matches the ledger.', fp);
+      receipt.classList.remove('shake'); void receipt.offsetWidth; receipt.classList.add('shake');
+      toast('heat', '⛔', 'Forgery rejected', 'One character changed — the co-signed fingerprint no longer matches.');
+    } else {
+      setVerdict('ok', '✓ Co-signature intact — matches the ledger.', fp);
+      toast('tether', '✓', 'Receipt verifies', 'Every field matches the fingerprint two fans co-signed.');
+    }
+  });
+
+  resetBtn.addEventListener('click', () => {
+    priceEl.textContent = money(pristine.priceUsdt);
+    seatEl.value = pristine.seat;
+    hashEl.value = pristine.hash;
+    setEditing(false);
+    refreshFp();
+    setVerdict('ok', '✓ Co-signature intact — matches the ledger.', genuineFp);
+    receipt.classList.remove('shake');
+  });
+
   return wrap;
+}
+
+/* attribute-safe escaping for values injected into input value="…" */
+function escapeAttr(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /* ============================================================

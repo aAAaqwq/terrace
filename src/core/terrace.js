@@ -57,9 +57,26 @@ export class TerraceCore {
     this.base = createLedger(this.store, this.bootstrap)
     await this.base.ready()
 
-    this.base.on('update', () => this._syncView())
+    // Emit a status update whenever the joiner's writable state flips (it
+    // becomes a co-writer via replication, not a local call) so the UI can
+    // clear its "getting authorized…" gate and enable writes.
+    this._lastWritable = this.base.writable
+    this.base.on('update', () => {
+      this._syncView()
+      if (this.base.writable !== this._lastWritable) {
+        this._lastWritable = this.base.writable
+        this._emitStatus()
+      }
+    })
 
-    const localWriterKey = b4a.toString(this.base.local.key, 'hex')
+    // Identity used for the proof-of-possession pairing handshake: the writer
+    // key, its signing keyPair (to sign challenge nonces) and the manifest
+    // version needed to bind a signer key to its writer key.
+    const pairingIdentity = {
+      writerKey: this.base.local.key,
+      signer: this.base.local.keyPair,
+      manifestVersion: this.store.manifestVersion
+    }
 
     this.swarm.on('connection', (conn) => {
       this.peers.add(conn)
@@ -67,7 +84,7 @@ export class TerraceCore {
         this.peers.delete(conn)
         this._emitStatus()
       })
-      attachPairing(conn, this.store, localWriterKey, (remoteKey) => this._onRemoteWriterKey(remoteKey))
+      attachPairing(conn, this.store, pairingIdentity, (remoteKey) => this._onRemoteWriterKey(remoteKey))
       this._emit('peer', { peerId: this.peerId, nation: this.nation, count: this.peers.size })
       this._emitStatus()
     })

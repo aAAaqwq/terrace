@@ -14,10 +14,13 @@ import { TerraceCore } from '../core/terrace.js'
 
 const pearGlobal = typeof Pear !== 'undefined' ? Pear : (globalThis.Pear || null)
 const args = pearGlobal?.config?.args ?? []
-const invite = args.find((a) => /^[0-9a-f]{64}$/i.test(a)) || null
-const storageDir = pearGlobal?.config?.storage
-  ? pearGlobal.config.storage + '/terrace'
-  : './store/app-' + (invite ? 'join' : 'host')
+// Pear deep-link invite (CLI hex arg). Kept as a fallback DEFAULT for the
+// invite field — the in-app onboarding can override it via start({ invite }).
+//   pear run --dev .                 -> hosts a new market
+//   pear run --dev . <invite-hex>    -> pre-fills join with that market
+const pearInvite = args.find((a) => /^[0-9a-f]{64}$/i.test(a)) || null
+
+const HEX64 = /^[0-9a-f]{64}$/i
 
 let core = null
 const pending = [] // listeners registered before start()
@@ -28,17 +31,34 @@ function ensureListeners () {
 }
 
 const api = {
-  async start ({ nation }) {
-    core = new TerraceCore({ storageDir, nation, bootstrap: invite })
+  // invite is an optional 64-hex market key: present => join, absent => host.
+  // Falls back to the Pear CLI arg when the UI doesn't supply one.
+  async start ({ nation, invite } = {}) {
+    const bootstrap = (invite && HEX64.test(invite)) ? invite.toLowerCase() : pearInvite
+    const storageDir = pearGlobal?.config?.storage
+      ? pearGlobal.config.storage + '/terrace'
+      : './store/app-' + (bootstrap ? 'join' : 'host')
+
+    core = new TerraceCore({ storageDir, nation, bootstrap })
     ensureListeners()
     const info = await core.start()
     if (core.isHost) {
       // Surface the invite so the host can share it peer-to-peer.
       console.log('%c[Terrace] Market invite (share P2P):', 'font-weight:bold', info.bootstrap)
-      api.invite = info.bootstrap
-      window.__TERRACE_INVITE__ = info.bootstrap
     }
-    return { peerId: info.peerId, nation: info.nation, bootstrap: info.bootstrap, writable: info.writable }
+    // The market key is shareable for a host and confirms the joined market
+    // for a guest — expose it both ways for the UI's invite control.
+    api.invite = info.bootstrap
+    api.isHost = core.isHost
+    window.__TERRACE_INVITE__ = info.bootstrap
+    return {
+      peerId: info.peerId,
+      nation: info.nation,
+      bootstrap: info.bootstrap,
+      invite: info.bootstrap,
+      isHost: core.isHost,
+      writable: info.writable
+    }
   },
 
   on (event, cb) {

@@ -11,12 +11,33 @@
 
 import Autobase from 'autobase'
 import Hyperbee from 'hyperbee'
+import Hypercore from 'hypercore'
+import sodium from 'sodium-universal'
 import b4a from 'b4a'
 
 const KEY = {
   listing: (id) => `listing/${id}`,
   offer: (id) => `offer/${id}`,
   trade: (id) => `trade/${id}`
+}
+
+// Personalization for the store-encryption key derivation. Acts as the
+// generichash key so the derived value is domain-separated from any other
+// hash of the same bootstrap key (e.g. the swarm room topic).
+const STORE_ENC_CONTEXT = b4a.from('terrace:store-enc:1')
+
+// Derive the Corestore/Autobase encryption key DETERMINISTICALLY from the
+// market bootstrap key (the invite). Host and joiner both hold that same key
+// — the host derives it from its own base.key (== the invite it hands out),
+// the joiner from the invite it was given — so they independently arrive at
+// the SAME encryption key WITHOUT ever transmitting it. Only invite-holders
+// can decrypt the replicated ledger; on disk the cores are ciphertext, so
+// there is literally no plaintext market for a "server" to leak.
+export function deriveStoreEncryptionKey (bootstrapKey) {
+  const key = b4a.isBuffer(bootstrapKey) ? bootstrapKey : b4a.from(bootstrapKey, 'hex')
+  const out = b4a.alloc(sodium.crypto_generichash_KEYBYTES) // 32 bytes
+  sodium.crypto_generichash(out, key, STORE_ENC_CONTEXT)
+  return out
 }
 
 // Build the Autobase. `bootstrap` is null for the host (creator) or the
@@ -29,8 +50,39 @@ const KEY = {
 export function createLedger (store, bootstrap) {
   const boot = bootstrap ? (b4a.isBuffer(bootstrap) ? bootstrap : b4a.from(bootstrap, 'hex')) : null
 
+  // Autobase's native `encryptionKey` handler encrypts every core (oplog +
+  // the linearized Hyperbee view) at rest and on the wire. The chicken/egg is
+  // that the host derives the key from base.key, which normally isn't known
+  // until after ready(). We break it by giving the HOST a deterministic writer
+  // keyPair: base.key is then Hypercore.key(manifest(keyPair.publicKey)), which
+  // we can compute up front — so the key is available BEFORE the first write.
+  // The joiner already holds the invite (== base.key) at construction.
+  //
+  // Both `keyPair` and `encryptionKey` are supported as async handlers
+  // (awaited during ready()), so createLedger stays synchronous and the public
+  // API is unchanged.
+  const keyPairPromise = boot ? null : (async () => {
+    await store.ready()
+    const publicKey = b4a.alloc(sodium.crypto_sign_PUBLICKEYBYTES)
+    const secretKey = b4a.alloc(sodium.crypto_sign_SECRETKEYBYTES)
+    sodium.crypto_sign_keypair(publicKey, secretKey)
+    return { publicKey, secretKey }
+  })()
+
+  const encryptionKeyPromise = (async () => {
+    if (boot) return deriveStoreEncryptionKey(boot)
+    await store.ready()
+    const kp = await keyPairPromise
+    const manifest = { version: store.manifestVersion, signers: [{ publicKey: kp.publicKey }] }
+    // Hypercore.key(manifest) === the base.key Autobase will produce for this
+    // keyPair (verified against the installed autobase 7.28 / hypercore 11.33).
+    return deriveStoreEncryptionKey(Hypercore.key(manifest))
+  })()
+
   let base // captured so apply can read the bootstrap/host key
   base = new Autobase(store, boot, {
+    keyPair: keyPairPromise || undefined,
+    encryptionKey: encryptionKeyPromise,
     valueEncoding: 'json',
     open (viewStore) {
       return new Hyperbee(viewStore.get('terrace-view'), {
