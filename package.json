@@ -7,7 +7,9 @@
   "license": "MIT",
   "scripts": {
     "peer": "node test/node-peer.js",
-    "test": "node test/ledger.test.js"
+    "test": "node test/ledger.test.js && node test/swarm.test.js",
+    "test:ledger": "node test/ledger.test.js",
+    "test:swarm": "node test/swarm.test.js"
   },
   "pear": {
     "name": "terrace",
@@ -25,6 +27,10 @@
     "corestore": "^7.4.0",
     "hyperbee": "^2.20.0",
     "hyperswarm": "^4.11.0",
-    "protomux": "^3.10.4"
+    "protomux": "^3.10.4",
+    "sodium-universal": "^5.0.1"
+  },
+  "devDependencies": {
+    "hyperdht": "^6.32.0"
   }
 }

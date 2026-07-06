@@ -50,6 +50,10 @@ async function main () {
   const join = createLedger(joinStore, host.key)
   await join.ready()
 
+  // Real writer keys — the ledger enforces authorship against these.
+  const hostKey = b4a.toString(host.local.key, 'hex')
+  const joinKey = b4a.toString(join.local.key, 'hex')
+
   // Wire replication both directions.
   const s1 = hostStore.replicate(true)
   const s2 = joinStore.replicate(false)
@@ -72,20 +76,20 @@ async function main () {
   // 3) Host (seller, Argentina) lists a Final ticket.
   await host.append({
     type: 'listing', id: 'L1', match: 'Final · ARG vs FRA', section: 'North Stand',
-    seat: 'N12-R7-S21', priceUsdt: 850, nation: 'ARG', sellerId: 'host', ts: 1, status: 'open'
+    seat: 'N12-R7-S21', priceUsdt: 850, nation: 'ARG', sellerId: hostKey, ts: 1, status: 'open'
   })
   await settle(host)
 
   // 4) Joiner (buyer, France) makes an offer.
-  await join.append({ type: 'offer', id: 'O1', listingId: 'L1', buyerId: 'join', buyerNation: 'FRA', ts: 2 })
+  await join.append({ type: 'offer', id: 'O1', listingId: 'L1', buyerId: joinKey, buyerNation: 'FRA', ts: 2 })
   await settle(join)
   await settle(host)
 
   // 5) Host co-signs -> trade enters the shared, ordered log.
   await host.append({
-    type: 'trade', id: 'T1', listingId: 'L1', offerId: 'O1', buyerId: 'join', sellerId: 'host',
+    type: 'trade', id: 'T1', listingId: 'L1', offerId: 'O1', buyerId: joinKey, sellerId: hostKey,
     buyerNation: 'FRA', sellerNation: 'ARG', match: 'Final · ARG vs FRA', seat: 'N12-R7-S21',
-    priceUsdt: 850, state: 'cosigned', cosignedBy: 'host', ts: 3
+    priceUsdt: 850, state: 'cosigned', cosignedBy: hostKey, ts: 3
   })
 
   // 6) Both peers converge on the same trade + listing status.
@@ -110,7 +114,7 @@ async function main () {
 
   // 7) Settlement leg marks it settled on the shared log.
   await join.append({
-    type: 'trade', id: 'T1', listingId: 'L1', offerId: 'O1', buyerId: 'join', sellerId: 'host',
+    type: 'trade', id: 'T1', listingId: 'L1', offerId: 'O1', buyerId: joinKey, sellerId: hostKey,
     buyerNation: 'FRA', sellerNation: 'ARG', match: 'Final · ARG vs FRA', seat: 'N12-R7-S21',
     priceUsdt: 850, state: 'settled', settlement: { kind: 'mock' }, ts: 4
   })
@@ -128,7 +132,20 @@ async function main () {
   }, 'listing settled on host')
   console.log('✓ settlement propagated (pending -> settled)')
 
-  // 8) Sanity on collections.
+  // 8) FORGERY REJECTED: the buyer tries to co-sign a NEW trade on a listing
+  //    they don't own. The ledger drops it because the author isn't the seller.
+  await join.append({
+    type: 'trade', id: 'FORGE', listingId: 'L1', offerId: 'O1', buyerId: joinKey, sellerId: hostKey,
+    buyerNation: 'FRA', sellerNation: 'ARG', match: 'Final · ARG vs FRA', seat: 'N12-R7-S21',
+    priceUsdt: 1, state: 'cosigned', cosignedBy: joinKey, ts: 5
+  })
+  // Give it every chance to (wrongly) appear, then assert it never did.
+  await waitFor([host, join], async () => true, 'flush', 2000).catch(() => {})
+  const forged = await getTrade(host, 'FORGE')
+  assert.strictEqual(forged, null, 'buyer-forged co-sign is rejected by the ledger')
+  console.log('✓ forged co-sign REJECTED (buyer cannot fake the seller\'s signature)')
+
+  // 9) Sanity on collections.
   const listings = await listListings(host)
   const trades = await listTrades(join)
   assert.strictEqual(listings.length, 1)
