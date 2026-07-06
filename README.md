@@ -8,7 +8,9 @@ Two fans of different nations connect directly — no server, no scalper platfor
 
 ## Why
 
-World Cup tickets route through scalpers, servers, and platforms that take a cut, leak data, and let fraud through. When an Argentina fan wants to sell a spare Final ticket to a France fan, there's no neutral, trustworthy rail between two strangers from different countries. Terrace is that rail: peer-to-peer USDt settlement coordinated over [Holepunch's Pears stack](https://docs.pears.com), where the "matching engine" is just two laptops and a co-signed [Autobase](https://docs.pears.com/building-blocks/autobase) ledger.
+Fan-to-fan value — a spare ticket, a fan-pass, a shared travel package — routes through scalpers, servers, and platforms that take a cut, leak data, and let fraud through. Between two strangers from different countries there's no neutral, trustworthy rail. Terrace is that rail: peer-to-peer USDt settlement coordinated over [Holepunch's Pears stack](https://docs.pears.com), where the "matching engine" is just two laptops and a co-signed [Autobase](https://docs.pears.com/building-blocks/autobase) ledger — and the co-signature is **enforced in code**, so neither party can forge a trade the other didn't independently sign.
+
+**On the asset (honest scope).** Terrace is a general P2P fan-value settlement rail; the flagship asset is match tickets, but real FIFA tournament tickets are personalized and non-transferable outside official resale, so the demo settles **transferable / self-issued fan-passes**. Anchoring to an issuer-provided ticket credential is the v2 path that makes real ticket resale valid — see [docs/DESIGN-escrow.md](docs/DESIGN-escrow.md) and [docs/REVIEW.md](docs/REVIEW.md).
 
 ## How it works
 
@@ -77,6 +79,7 @@ Both print a green `ALL … TESTS PASSED ✅`.
 - [docs/PITCH.md](docs/PITCH.md) — the story & pitch
 - [docs/DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md) — 3-min video script + demo runbook
 - [docs/DESIGN-escrow.md](docs/DESIGN-escrow.md) — escrow trust model + USDt settlement
+- [docs/REVIEW.md](docs/REVIEW.md) — 5-dimension audit + action plan
 - [docs/DECISIONS.md](docs/DECISIONS.md) · [docs/STRATEGY.md](docs/STRATEGY.md) · [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) · [docs/COMPETITORS.md](docs/COMPETITORS.md)
 
 ## License

@@ -49,9 +49,20 @@ Serverless peer-to-peer USDt over-the-counter trading / escrow desk.
 - Runtime confirmed: Pear v2.6.5 / bare 1.24.3 installed. `pear init` is REMOVED; `pear run` is deprecated-but-works. Modern path = build with `hyperswarm`/`autobase`/`hyperbee` npm modules (Node-testable) + `pear-runtime` for the desktop shell.
 - Locked decision #4 amended: concept is **Terrace** (fan ticket/asset exchange), not generic OTC.
 
+## UPDATE 2026-07-06 — 5-dimension review outcomes (see docs/REVIEW.md)
+- **Genuine Pears usage: PASS** — verified real Pears, not a wrapper.
+- **Co-signature is now ENFORCED in code** (`apply()` checks the authoring writer key); a buyer can no longer forge a seller's acceptance (test proves it). This was the biggest technical gap.
+- **Use-case reframe (honesty):** real FIFA 2026 tickets are personalized & **non-transferable** outside official resale — a P2P-sold ticket voids at the gate. So Terrace is positioned as a **P2P fan-value settlement rail** (asset-agnostic), with **transferable / self-issued fan-passes** as the demo asset and real ticket resale as a **v2 vision contingent on issuer-credential integration**. Name this openly; don't let a knowledgeable judge pull the thread.
+- **Regulatory framing for Tether audience:** lead with self-custody + disintermediation; do NOT lean into "untraceable / no KYC / cross-border no-bank" (AML optics). Never demo the prediction-pool wedge (betting).
+- **Next up:** in-app invite flow + writable-state UI (UX P0); "forge it & fail" interactive receipt proof (creativity P0); tokenized fan-pass so HTLC atomic swap is honest (real-world P0 for semis).
+
 ## Open items
-- [ ] Frontend stack — going plain HTML/JS (Pear desktop, no build step) unless changed
+- [x] Frontend stack — plain HTML/JS (Pear desktop, no build step)
 - [x] Pear CLI install + runtime smoke test — DONE (v2.6.5)
-- [ ] Escrow/trust model + USDt testnet settlement path → docs/DESIGN-escrow.md
-- [ ] v1: two fan-peers connect (Hyperswarm) + co-sign ticket trade (Autobase) + receipt + football UI
-- [ ] 3-min demo video
+- [x] v1 engine: two fan-peers connect (Hyperswarm) + co-sign ticket trade (Autobase) + receipt — DONE, tests green
+- [x] Escrow/trust model + USDt testnet settlement path → docs/DESIGN-escrow.md
+- [x] Public GitHub repo (MIT) → https://github.com/aAAaqwq/terrace
+- [ ] In-app invite flow + writable-state UI (UX P0)
+- [ ] "Forge it & fail" interactive receipt proof (creativity P0)
+- [ ] 3-min demo video → record via docs/DEMO-SCRIPT.md
+- [ ] Submit BUIDL on DoraHacks before 7/8 cut
