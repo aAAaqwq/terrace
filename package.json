@@ -7,6 +7,7 @@
   "license": "MIT",
   "scripts": {
     "peer": "node test/node-peer.js",
+    "scenario": "node test/scenario.js",
     "test": "node test/ledger.test.js && node test/swarm.test.js && node test/asset.test.js",
     "test:ledger": "node test/ledger.test.js",
     "test:swarm": "node test/swarm.test.js",
