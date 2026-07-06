@@ -11,11 +11,15 @@
 //
 // Interactive commands (type into either terminal):
 //   list                              show open listings
-//   sell <match> | <seat> | <price>   publish a ticket (USDt price)
+//   sell <match> | <seat> | <price> [ | <passSecret> ]
+//                                     publish a ticket; a 4th field issues a
+//                                     tokenized fan-pass (HTLC atomic delivery)
 //   offer <listingId>                 make an offer on a listing
 //   accept <offerId>                  co-sign an offer -> trade
 //   trades                            show trades you're in
-//   receipt <tradeId>                 print the verifiable receipt
+//   receipt <tradeId>                 print the verifiable receipt (settles it)
+//   pass <tradeId>                    show the fan-pass: LOCKED before settle,
+//                                     UNLOCKED (transfer code) after
 //   forge <listingId>                 TRY to fake a co-sign you're not the seller of
 //                                     (the ledger rejects it — the "forge & fail" proof)
 //   me                                show your peer id / status
@@ -95,10 +99,17 @@ async function main () {
           break
         }
         case 'sell': {
-          const [match, seat, price] = rest.split('|').map((s) => s.trim())
-          if (!match || !price) { console.log('usage: sell <match> | <seat> | <price>'); break }
-          const l = await core.publishListing({ match, section: 'GA', seat: seat || 'GA', priceUsdt: Number(price) })
-          console.log(`listed ${short(l.id)} · ${l.match} · ${l.priceUsdt} USDt`)
+          // sell <match> | <seat> | <price> [ | <passSecret> ]
+          // A 4th field issues a tokenized fan-pass (HTLC): the pass ships
+          // encrypted P2P and unlocks only when settlement reveals the secret.
+          const [match, seat, price, passSecret] = rest.split('|').map((s) => s.trim())
+          if (!match || !price) { console.log('usage: sell <match> | <seat> | <price> [ | <passSecret> ]'); break }
+          const l = await core.publishListing({
+            match, section: 'GA', seat: seat || 'GA', priceUsdt: Number(price),
+            passSecret: passSecret || null
+          })
+          const passNote = l.hashlock ? ` · 🔒 tokenized pass · hashlock ${short(l.hashlock, 12)}…` : ''
+          console.log(`listed ${short(l.id)} · ${l.match} · ${l.priceUsdt} USDt${passNote}`)
           break
         }
         case 'offer': {
@@ -136,6 +147,23 @@ async function main () {
           console.log('-------------------------------------------\n')
           break
         }
+        case 'pass': {
+          // Show the tokenized fan-pass for a trade: LOCKED before settlement,
+          // UNLOCKED (revealing the transfer code) after the atomic reveal.
+          if (!rest) { console.log('usage: pass <tradeId>'); break }
+          const full = (await core.getTrades()).find((t) => t.id.startsWith(rest))
+          const id = full ? full.id : rest
+          let p = await core.getPass(id)
+          if (!p || !p.hasPass) { console.log('(this trade has no tokenized pass)'); break }
+          if (p.locked) {
+            console.log(`🔒 LOCKED · hashlock ${short(p.hashlock, 16)}… · encrypted, delivered P2P, awaiting settlement`)
+            console.log('   (run: receipt ' + short(id) + '  — settling reveals the secret and unlocks it)')
+          } else if (p.revealed) {
+            console.log(`🔓 UNLOCKED · transferCode = ${p.pass.transferCode}`)
+            console.log('   the seller could not be paid without revealing the secret that unlocked this pass')
+          }
+          break
+        }
         case 'forge': {
           // Adversarial proof: append a co-signed trade for a listing you
           // don't own. The ledger's apply() checks the authoring writer key
@@ -162,7 +190,7 @@ async function main () {
         case 'quit': case 'exit':
           await core.destroy(); rl.close(); process.exit(0); break
         default:
-          console.log('commands: list | sell a|b|c | offer <id> | accept <id> | trades | receipt <id> | me | quit')
+          console.log('commands: list | sell match|seat|price[|passSecret] | offer <id> | accept <id> | trades | receipt <id> | pass <id> | forge <id> | me | quit')
       }
     } catch (err) {
       console.log('error:', err.message)

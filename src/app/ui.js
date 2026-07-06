@@ -378,6 +378,7 @@ const state = {
   receipts: new Map(),      // tradeId -> Receipt
   passes: new Map(),        // tradeId -> getPass() result (revealed HTLC fan-pass)
   passUnlockedUI: new Set(),// tradeIds whose LOCKED→UNLOCKED reveal already played
+  settling: new Set(),      // tradeIds the seller has already triggered settlement for
   seenTrades: new Set(),    // tradeIds already toasted at 'offered'
   newBadge: 0,              // unseen settled/trade badge for Trades tab
   // in-app invite + authorization
@@ -890,12 +891,12 @@ function listingCard(l, feature) {
       <span class="sellerflag"><span class="flag">${flagOf(l.nation)}</span>${mine ? 'You' : nameOf(l.nation) + ' seller'}</span>
       ${statusPill}
     </div>
-    <div class="match">${l.match}</div>
-    <div class="stage">${stage}</div>
+    <div class="match">${escapeHtml(l.match)}</div>
+    <div class="stage">${escapeHtml(stage)}</div>
     ${l.hashlock ? '<div class="pass-tag">🔒 Tokenized pass</div>' : ''}
     <div class="seatline">
-      <span class="seatchip">${l.section}</span>
-      <span class="seatchip"><b>${l.seat}</b></span>
+      <span class="seatchip">${escapeHtml(l.section)}</span>
+      <span class="seatchip"><b>${escapeHtml(l.seat)}</b></span>
     </div>
     <div class="listing-foot">
       <div class="price">
@@ -1160,6 +1161,17 @@ function onTradeUpdate(trade) {
   } else if (trade.state === 'cosigned') {
     toast('tether', '✍️', `Trade co-signed on the ledger`,
       `${money(trade.priceUsdt)} USD₮ · both sides signed`);
+    // The real core does not auto-settle. The SELLER (who alone holds the
+    // fan-pass secret to reveal) triggers settlement so the receipt and the
+    // atomic pass-unlock actually render P2P. The buyer just waits for the
+    // 'settled' trade event to replicate in.
+    if (state.me && trade.sellerId === state.me.peerId && !state.settling.has(trade.id)) {
+      state.settling.add(trade.id);
+      Promise.resolve(core.settleTrade(trade.id)).catch((err) => {
+        state.settling.delete(trade.id);
+        toast('heat', '⚠️', 'Settlement failed', String(err && err.message || err));
+      });
+    }
   } else if (trade.state === 'settled') {
     settleTrade(trade);
   }
@@ -1173,6 +1185,9 @@ function onTradeUpdate(trade) {
 }
 
 async function settleTrade(trade) {
+  // Idempotent: the 'settled' event can arrive more than once (seller-triggered
+  // settle + replication). Only toast/reveal on the first pass.
+  const already = state.receipts.has(trade.id);
   try {
     const receipt = await core.getReceipt(trade.id);
     state.receipts.set(trade.id, receipt);
@@ -1182,14 +1197,16 @@ async function settleTrade(trade) {
       try {
         const pass = await core.getPass(trade.id);
         state.passes.set(trade.id, pass);
-        if (pass && pass.revealed) {
+        if (pass && pass.revealed && !already) {
           toast('tether', '🔓', 'Fan-pass unlocked',
             'Payment settled → the seller’s secret was revealed → the pass is yours.');
         }
       } catch (_) { /* pass optional; receipt still stands */ }
     }
-    toast('tether', '🧾', `Settled · receipt verified`,
-      `${money(receipt.priceUsdt)} USD₮ · ledger #${receipt.ledgerHeight}`);
+    if (!already) {
+      toast('tether', '🧾', `Settled · receipt verified`,
+        `${money(receipt.priceUsdt)} USD₮ · ledger #${receipt.ledgerHeight}`);
+    }
   } catch (err) {
     toast('heat', '⚠️', 'Receipt unavailable', String(err.message || err));
   }
@@ -1269,7 +1286,7 @@ function tradeCard(t) {
       </span>
     </div>
     <div>
-      <div class="tc-match">${match}</div>
+      <div class="tc-match">${escapeHtml(match)}</div>
       <div class="tc-meta">
         <span class="role-chip">${roleLabel}</span>
         <span class="amt">${money(t.priceUsdt)} USD₮</span>
@@ -1458,7 +1475,7 @@ function receiptHero(r, trade) {
       <div class="stamp"><span class="stamp-ok">Verified</span><span class="stamp-bad">Invalid</span></div>
       <div class="receipt-body">
         <div class="receipt-head">
-          <div class="r-title">${r.match}</div>
+          <div class="r-title">${escapeHtml(r.match)}</div>
           <div class="r-id">TRADE ${truncId(r.tradeId)}</div>
         </div>
         <div class="faceoff">

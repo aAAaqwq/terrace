@@ -69,11 +69,14 @@ pear run --dev . <invite-hex>    # window 2: joins that market
 ## Verify it actually works
 
 ```bash
-node test/ledger.test.js   # offline end-to-end proof of the co-signed multi-writer ledger
+npm test                   # runs all three suites below
+node test/ledger.test.js   # offline proof: co-signed ledger, forgery rejected, encryption, PoP
 node test/swarm.test.js    # full two-peer trade over a real Hyperswarm (local DHT testnet)
+node test/asset.test.js    # HTLC atomic fan-pass: wrong preimage rejected, atomic unlock
+npm run scenario           # narrated end-to-end demo run over a real swarm
 ```
 
-Both print a green `ALL … TESTS PASSED ✅`.
+Each prints a green `ALL … TESTS PASSED ✅`.
 
 ## Docs
 

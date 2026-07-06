@@ -71,6 +71,9 @@ const api = {
   makeOffer: (...a) => core.makeOffer(...a),
   acceptOffer: (...a) => core.acceptOffer(...a),
   settleTrade: (...a) => core.settleTrade(...a),
+  // Exposes the HTLC fan-pass so the UI can play the atomic LOCKED->UNLOCKED
+  // reveal on the real core (returns {hasPass,locked,revealed,hashlock,pass}).
+  getPass: (...a) => core.getPass(...a),
 
   // The UI fetches a receipt after co-sign; auto-run the (mock) settlement
   // leg once so the receipt card shows a settled trade in the demo.
