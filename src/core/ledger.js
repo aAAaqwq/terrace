@@ -15,6 +15,8 @@ import Hypercore from 'hypercore'
 import sodium from 'sodium-universal'
 import b4a from 'b4a'
 
+import { verifyPreimage } from './asset.js'
+
 const KEY = {
   listing: (id) => `listing/${id}`,
   offer: (id) => `offer/${id}`,
@@ -143,6 +145,18 @@ async function applyDomainOp (view, op, author) {
         const prev = await safeGet(view, KEY.trade(op.id))
         const parties = new Set([op.buyerId, op.sellerId, prev?.buyerId, prev?.sellerId].filter(Boolean))
         if (author && parties.size && !parties.has(author)) return
+
+        // HTLC ATOMICITY: if this trade's listing issued a tokenized fan-pass,
+        // it carries a hashlock H. Settlement is then valid ONLY if it reveals a
+        // preimage S with hashlock(S) === H. A settlement with a wrong/missing
+        // preimage is dropped — so the seller cannot reach the "settled/paid"
+        // state without publishing the very secret that unlocks the buyer's
+        // pass. H is taken from the listing (or the prior trade record that
+        // inherited it), never from the settling op, so the settler cannot
+        // choose their own lock. Trades with no hashlock keep prior behavior.
+        const H = listing?.hashlock || prev?.hashlock || null
+        if (H && !verifyPreimage(op.preimage, H)) return
+        if (H) op = { ...op, revealed: true }
       }
       await view.put(KEY.trade(op.id), { ...op })
       if (listing) {

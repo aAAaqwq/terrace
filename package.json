@@ -7,9 +7,10 @@
   "license": "MIT",
   "scripts": {
     "peer": "node test/node-peer.js",
-    "test": "node test/ledger.test.js && node test/swarm.test.js",
+    "test": "node test/ledger.test.js && node test/swarm.test.js && node test/asset.test.js",
     "test:ledger": "node test/ledger.test.js",
-    "test:swarm": "node test/swarm.test.js"
+    "test:swarm": "node test/swarm.test.js",
+    "test:asset": "node test/asset.test.js"
   },
   "pear": {
     "name": "terrace",

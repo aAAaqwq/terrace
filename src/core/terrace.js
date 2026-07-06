@@ -16,6 +16,7 @@ import sodium from 'sodium-universal'
 
 import { createLedger, listListings, listTrades, listOffers, getTrade, getListing } from './ledger.js'
 import { attachPairing } from './pairing.js'
+import { PassVault, passHashlock, preimageHexOf, verifyPreimage } from './asset.js'
 
 const TOPIC_CONTEXT = 'terrace:room:1'
 
@@ -35,6 +36,12 @@ export class TerraceCore {
     this._seenListings = new Set()
     this._seenOffers = new Set()
     this._seenTrades = new Map() // id -> state, to emit on state change
+    // Tokenized fan-pass (HTLC) delivery. The vault holds the encrypted-pass
+    // Hypercore that replicates over the same swarm; _passSecrets keeps the
+    // seller's plaintext secret S in memory ONLY (never on the ledger) so this
+    // peer can reveal it at settlement to unlock the pass for the buyer.
+    this._passVault = new PassVault(this.store)
+    this._passSecrets = new Map() // listingId -> secret S (seller-local only)
   }
 
   // ---- events -----------------------------------------------------------
@@ -134,7 +141,12 @@ export class TerraceCore {
   }
 
   // ---- writes -----------------------------------------------------------
-  async publishListing ({ match, section, seat, priceUsdt, nation }) {
+  // `passSecret` is OPTIONAL and fully backward compatible: omit it for the
+  // classic listing. Provide it (a transfer code / QR payload) to issue a
+  // tokenized fan-pass delivered via hashlock — the seller attaches an
+  // encrypted pass payload and publishes only H = hashlock(S), plus the pass
+  // core reference, on the ledger. Revealing S is deferred to settlement.
+  async publishListing ({ match, section, seat, priceUsdt, nation, passSecret = null, passPayload = null }) {
     await this._whenWritable()
     const listing = {
       type: 'listing',
@@ -148,6 +160,25 @@ export class TerraceCore {
       ts: nowTs(),
       status: 'open'
     }
+
+    if (passSecret != null) {
+      // Default the delivered payload to the trade coordinates + the secret
+      // transfer code itself, so decrypting the pass yields the redeemable pass.
+      const payload = passPayload ?? {
+        kind: 'terrace-fan-pass',
+        match,
+        section,
+        seat,
+        transferCode: String(passSecret),
+        note: 'Tokenized fan-pass — present transferCode to redeem'
+      }
+      const ref = await this._passVault.seal(passSecret, payload)
+      listing.hashlock = ref.hashlock
+      listing.pass = { coreKey: ref.coreKey, block: ref.block, nonce: ref.nonce }
+      // Seller-local only: needed to reveal S at settlement. Never appended.
+      this._passSecrets.set(listing.id, String(passSecret))
+    }
+
     await this.base.append(listing)
     await this.base.update()
     return stripType(listing)
@@ -196,28 +227,84 @@ export class TerraceCore {
       cosignedBy: this.peerId,
       ts: nowTs()
     }
+    // Inherit the tokenized-pass hashlock so the trade carries the atomic-swap
+    // lock forward to settlement and getPass (additive; absent for classic trades).
+    if (listing.hashlock) {
+      trade.hashlock = listing.hashlock
+      if (listing.pass) trade.pass = listing.pass
+    }
     await this.base.append(trade)
     await this.base.update()
     return stripType(trade)
   }
 
-  // Settlement leg. v1 records a settlement proof (a real USDt testnet tx
-  // hash when wired; a clearly-labelled mock otherwise) onto the trade.
-  async settleTrade (tradeId, proof = null) {
+  // Settlement leg. The payment stays a clearly-labelled mock/testnet USDt
+  // transfer (no real funds move). What is REAL here is the atomic delivery:
+  // if the trade issued a tokenized fan-pass (a hashlock H is present), this
+  // settlement MUST reveal the preimage S — hashlock(S) === H — or the ledger's
+  // apply() drops it. Revealing S is exactly what unlocks the buyer's pass, so
+  // the seller cannot reach "settled/paid" without handing over the key. The
+  // seller supplies S automatically (held in memory since publishListing);
+  // opts.passSecret can override it.
+  async settleTrade (tradeId, proof = null, opts = {}) {
     await this._whenWritable()
     const trade = await getTrade(this.base, tradeId)
     if (!trade) throw new Error('trade not found: ' + tradeId)
+
     const settled = {
       ...trade,
       type: 'trade',
       state: 'settled',
-      settlement: proof || { kind: 'mock', note: 'demo settlement — no real funds moved', ts: nowTs() },
+      settlement: proof || { kind: 'mock', paid: true, note: 'demo settlement — no real funds moved', ts: nowTs() },
       settledBy: this.peerId,
       ts: nowTs()
     }
+
+    const listing = await getListing(this.base, trade.listingId)
+    const hashlock = trade.hashlock || listing?.hashlock || null
+    if (hashlock) {
+      // Reveal the unlocking preimage. Prefer an explicit override, else the
+      // seller-local secret captured at publish time.
+      const secret = opts.passSecret != null
+        ? String(opts.passSecret)
+        : this._passSecrets.get(trade.listingId)
+      if (secret == null) {
+        throw new Error('cannot settle a tokenized-pass trade without the unlocking secret (only the seller can reveal it)')
+      }
+      if (passHashlock(secret) !== hashlock) {
+        throw new Error('provided pass secret does not match the listing hashlock')
+      }
+      settled.preimage = preimageHexOf(secret) // this is the on-ledger reveal of S
+      settled.revealed = true
+    }
+
     await this.base.append(settled)
     await this.base.update()
     return stripType(settled)
+  }
+
+  // Buyer-facing pass retrieval. Before the seller reveals S at settlement this
+  // returns a LOCKED indicator; after reveal it decrypts and returns the pass.
+  // The buyer can never obtain the plaintext pass until S is on the ledger.
+  async getPass (tradeId) {
+    const trade = await getTrade(this.base, tradeId)
+    if (!trade) return null
+    const listing = await getListing(this.base, trade.listingId)
+    const ref = trade.pass || listing?.pass || null
+    const hashlock = trade.hashlock || listing?.hashlock || null
+
+    if (!ref || !hashlock) {
+      // Classic listing with no tokenized pass.
+      return { hasPass: false, locked: false, revealed: false, hashlock: null, pass: null }
+    }
+
+    const preimage = (trade.state === 'settled' && trade.revealed && trade.preimage) ? trade.preimage : null
+    if (!preimage || !verifyPreimage(preimage, hashlock)) {
+      return { hasPass: true, locked: true, revealed: false, hashlock, pass: null }
+    }
+
+    const pass = await this._passVault.open({ ...ref, hashlock }, preimage)
+    return { hasPass: true, locked: false, revealed: true, hashlock, pass }
   }
 
   // ---- reads ------------------------------------------------------------
@@ -243,6 +330,10 @@ export class TerraceCore {
       sellerNation: trade.sellerNation,
       state: trade.state,
       settlement: trade.settlement || null,
+      // Tokenized-pass / HTLC fields (null for classic trades).
+      hashlock: trade.hashlock || null,
+      revealed: !!trade.revealed,
+      passUnlocked: !!(trade.revealed && trade.preimage),
       ledgerHeight: this.base.view?.version ?? this.base.length ?? 0,
       hash: receiptHash(trade),
       ts: trade.ts
@@ -312,6 +403,7 @@ export class TerraceCore {
 
   async destroy () {
     await this.swarm.destroy()
+    await this._passVault?.close()
     await this.base?.close()
     await this.store.close()
   }
