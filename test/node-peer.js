@@ -16,6 +16,8 @@
 //   accept <offerId>                  co-sign an offer -> trade
 //   trades                            show trades you're in
 //   receipt <tradeId>                 print the verifiable receipt
+//   forge <listingId>                 TRY to fake a co-sign you're not the seller of
+//                                     (the ledger rejects it — the "forge & fail" proof)
 //   me                                show your peer id / status
 //   quit
 
@@ -132,6 +134,26 @@ async function main () {
           console.log(`  hash: ${fr.hash}`)
           console.log('  No server. No scalper. Co-signed peer-to-peer.')
           console.log('-------------------------------------------\n')
+          break
+        }
+        case 'forge': {
+          // Adversarial proof: append a co-signed trade for a listing you
+          // don't own. The ledger's apply() checks the authoring writer key
+          // and drops it — you cannot fake the seller's signature.
+          if (!rest) { console.log('usage: forge <listingId>'); break }
+          const full = (await core.getListings()).find((l) => l.id.startsWith(rest)) || { id: rest, sellerId: 'someone-else' }
+          const forgedId = 'FORGE_' + short(full.id)
+          console.log(`attempting to forge a co-signed trade on ${short(full.id)} as ${short(core.peerId)}… (you are NOT the seller)`)
+          await core.base.append({
+            type: 'trade', id: forgedId, listingId: full.id, buyerId: core.peerId, sellerId: full.sellerId,
+            buyerNation: core.nation, sellerNation: '??', match: full.match || '?', seat: full.seat || '?',
+            priceUsdt: 1, state: 'cosigned', cosignedBy: core.peerId, ts: Date.now()
+          })
+          await core.base.update()
+          await new Promise((r) => setTimeout(r, 600))
+          const landed = (await core.getTrades()).find((t) => t.id === forgedId)
+          if (landed) console.log('⚠️  forgery LANDED — enforcement is broken!')
+          else console.log('❌ forgery REJECTED by the ledger — you are not the seller-writer. The co-signature can\'t be faked.')
           break
         }
         case 'me':
