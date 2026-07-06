@@ -18,7 +18,8 @@ Fan-to-fan value — a spare ticket, a fan-pass, a shared travel package — rou
 - **Protomux pairing** — the two peers swap Autobase writer keys over the same encrypted stream that carries replication.
 - **Multi-writer Autobase** — buyer *and* seller are cryptographic writers on one shared, ordered log. The linearized log **is** the co-signature: every listing, offer, and acceptance is signed by its author. A **Hyperbee** view indexes listings/offers/trades for the UI.
 - **Verifiable receipt** — each settled trade yields a content hash + ledger height, shown as a ticket-stub receipt (nation vs nation, seat, USDt amount).
-- **Settlement leg** — v1 records a clearly-labeled mock/testnet proof; v2 is a **2-of-3 non-custodial escrow on Ethereum Sepolia via Tether's WDK** with real test USDt (never Terrace custody). See [docs/DESIGN-escrow.md](docs/DESIGN-escrow.md).
+- **Atomic fan-pass delivery (HTLC)** — a seller can issue a Terrace-tokenized fan-pass: the pass is secretbox-encrypted and delivered peer-to-peer over a dedicated **Hypercore** blob, published to the ledger only as a hashlock `H = generichash(S)`. The ledger accepts settlement **only if it reveals a preimage `S` that hashes to `H`**, and that same `S` is the only key that decrypts the pass — so the seller *cannot get paid without simultaneously handing the buyer the pass*. Delivery-vs-reveal atomicity is real and tested; the USDt payment leg is a labeled mock. Wrong/missing preimages are rejected. See [test/asset.test.js](test/asset.test.js).
+- **Settlement leg** — v1 records a clearly-labeled mock/testnet proof; for externally-issued tickets (which can't be tokenized) v2 is a **2-of-3 non-custodial escrow on Ethereum Sepolia via Tether's WDK** with real test USDt (never Terrace custody). See [docs/DESIGN-escrow.md](docs/DESIGN-escrow.md).
 
 ## Quick start
 

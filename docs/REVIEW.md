@@ -56,8 +56,8 @@ Terrace is structurally novel for the Pears track (financial settlement is white
 4. ✅ In-app invite flow + writable-state UI (UX P0) — **done** (host copyable invite panel, join paste field, auth gating; 31/31 Chromium assertions).
 5. ✅ "Forge it & fail" interactive receipt proof (creativity P0) — **done** (tamper→reject in the GUI; also a CLI `forge` command; backed by the enforced ledger).
 6. ✅ Encrypted ledger at rest + proof-of-possession pairing handshake — **done** (privacy flex + anti-spoof/replay; new tests green).
-7. 🔜 Hyperdrive ticket-handoff (tech P1) + tokenized fan-pass so HTLC atomic swap is honest (real-world P0 for semis) — next wave.
-8. 💤 dispute-as-third-writer, a11y polish — semifinal polish.
+7. ✅ Tokenized fan-pass + HTLC atomic delivery (tech P1 + real-world P0) — **done** (encrypted pass over a Hypercore blob; settlement rejected unless it reveals the preimage that both pays the seller and unlocks the buyer's pass; wrong/missing preimage rejected; tested over real swarm). This is the honest answer to "who holds the USDt / what stops a cheat" for Terrace-issued assets.
+8. 💤 dispute-as-third-writer, a11y polish, real testnet USDt via WDK — semifinal polish.
 
 ## Status after optimization wave (2026-07-06)
 Every P0/P1 from this review except the semifinal-scoped Hyperdrive/tokenized-asset work is **shipped and tested**. `npm test` runs both suites green, now covering: author-enforced co-sign, forgery rejection, encrypted-at-rest, no-invite-can't-read, and proof-of-possession. The GUI has a real invite flow, authorization gating, and the forge-and-fail proof. This is a materially stronger submission than the v1 baseline that already passed the genuine-Pears elimination filter.

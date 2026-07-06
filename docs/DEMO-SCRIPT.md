@@ -32,6 +32,23 @@ Structure: hook → human setup → live P2P connect ("no server") → list → 
 
 ---
 
+## 1b. The atomic fan-pass unlock — the strongest hero beat (use it)
+
+The build now issues a **tokenized fan-pass delivered by hashlock (HTLC)**. This is a stronger climax than "no server" because it's un-copyable and it answers the judges' hardest question (who holds the money / what stops a cheat) *on screen*. Consider making THIS the receipt-beat (replaces or augments 1:50–2:15).
+
+New UI to drive it: the **Publish** form has an optional "Attach a tokenized fan-pass" toggle + a transfer-code field; a pass listing shows a **🔒 Tokenized pass** badge; the receipt view shows the pass **LOCKED** (encrypted, delivered P2P, hashlock H shown) and then **UNLOCKING** the instant settlement reveals the secret.
+
+| Time | On-Screen Action | Narration (word-for-word) | Callout |
+|---|---|---|---|
+| pre | (off-camera) Seller issues the listing WITH a fan-pass — toggle on, transfer code e.g. `TERRACE-PASS-QR::A7K…`. | — | `🔒 tokenized pass` |
+| beat 1 | Buyer's receipt view: the pass is **LOCKED** — sealed/blurred, hashlock `H = …` visible. | *"The seller's ticket is already here — encrypted, delivered peer-to-peer. But it's locked. The only key is a secret the seller hasn't revealed."* | `LOCKED · encrypted · delivered P2P` |
+| beat 2 | Settle. The pass **unlocks** on-screen; the transfer code appears. | *"The moment payment settles, the ledger forces the seller to reveal that secret — and the same secret is the only thing that decrypts the pass. Watch: paid, and handed over, in one atomic act."* | `UNLOCKED · secret revealed · code TERRACE-PASS-QR::A7K…` |
+| beat 3 | (optional) Show `node test/node-peer.js` / the asset test line, or state it. | *"The seller literally cannot get paid without handing you the pass. There's no escrow agent, no arbitrator — the swap is atomic. That's tested; the payment rail is still a labeled mock, the atomicity is real."* | `settle w/ wrong secret → REJECTED (tested)` |
+
+Honesty gate (keep): say once, out loud or on-screen, that the **atomicity is real and tested while the USDt payment leg is a labeled mock**.
+
+---
+
 ## 2. Two Recording Setups
 
 ### Setup A — Polished GUI (two Pear windows, side by side)

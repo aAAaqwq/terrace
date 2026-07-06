@@ -3,17 +3,24 @@
 **Project:** Terrace — serverless P2P World Cup fan-ticket exchange on Holepunch's Pears stack (Hyperswarm + Autobase co-signed ledger), settled in USD₮.
 **Audience for this doc:** the build team, and by extension a Bitcoin-savvy judge (Guy Swann) who will benchmark Terrace against Bisq / RoboSats / HodlHodl multisig-escrow P2P trading and ask: **"Who holds the USD₮, and how is a dishonest counterparty stopped?"**
 
-The one-sentence answer we must be able to say on camera and defend:
+Terrace answers this in **two paths, and the honest headline is that the strongest one is already shipped:**
 
-> **Terrace never holds user funds. USD₮ sits in a 2-of-3 escrow smart contract that neither Terrace nor either party can drain unilaterally. The Autobase co-signed ledger is the tamper-evident record of every listing, offer, acceptance, settlement proof and dispute — so cheating is provable, and reputation-costly, even in the cases escrow alone cannot prevent.**
+> **Path 1 — tokenized fan-pass (SHIPPED, tested, `npm test` green).** For an asset Terrace itself issues — a tokenized fan-pass — there is **no escrow, no arbitrator, and no oracle, because the swap is atomic.** The ledger refuses to record a fan-pass settlement unless it reveals a preimage `S` whose `generichash(S)` equals the hashlock `H` published on the listing, and that same `S` is the only key that decrypts the peer-to-peer-replicated pass ciphertext — so the seller cannot reach the paid/settled state without simultaneously handing the buyer the secret that unlocks the pass, and the buyer cannot obtain the pass until that reveal happens. **Nobody holds funds and nothing can be taken, because delivery and payment are one indivisible act.**
+>
+> **Path 2 — externally-issued ticket (v2 roadmap).** For an asset Terrace does *not* control (a real FIFA/Ticketmaster e-ticket, which cannot be made preimage-gated), atomicity is impossible, so USD₮ sits in a **2-of-3 escrow** that neither Terrace nor either party can drain unilaterally, and the Autobase co-signed ledger is the tamper-evident record every dispute is adjudicated against.
 
-This document is deliberately honest about what escrow *does* and *does not* solve. Overclaiming "trustless ticket delivery" in front of Guy Swann is the fastest way to lose. We claim exactly what multisig escrow gives us — no more.
+**Honest boundary that runs through this whole doc:** what is now real and provable is the **atomicity of delivery-vs-reveal** for the tokenized pass. The **payment rail itself is still a clearly-labeled mock** — there is no real USD₮ moving on-chain yet. The atomic-swap *structure* is exactly what makes wiring the mock payment leg to real testnet USD₮ / WDK safe in v2. We claim the atomicity, not the settlement. Overclaiming "trustless ticket delivery" or "real USD₮ settlement" in front of Guy Swann is the fastest way to lose.
 
 ---
 
 ## 1. Threat model
 
-A P2P ticket-for-USD₮ trade has **two legs that must both complete**: the *money leg* (buyer → seller in USD₮) and the *delivery leg* (seller → buyer, the ticket). The whole problem is that these legs are not naturally atomic: money is an on-chain asset we can lock; a World Cup e-ticket is an off-chain fact (a transfer code, a FIFA/Ticketmaster account transfer, a barcode) we cannot cryptographically escrow. Every cheat exploits the gap between the two legs.
+A P2P ticket-for-USD₮ trade has **two legs that must both complete**: the *money leg* (buyer → seller in USD₮) and the *delivery leg* (seller → buyer, the pass/ticket). Whether these legs can be made naturally atomic depends entirely on **who issues the asset**:
+
+- **Terrace-issued tokenized fan-pass (the shipped v1 asset):** the pass *is* a preimage-gated secret. Terrace encrypts the pass payload under a secret `S`, publishes only the hashlock `H = generichash(S)` and a ciphertext reference on the ledger, and delivers the ciphertext peer-to-peer over a dedicated Hypercore blob (a 2nd Holepunch primitive) replicated across the same swarm. Because `S` is the only key that decrypts the pass **and** the ledger will not record settlement without `S`, the delivery leg and the reveal leg are the *same event*. The gap between the two legs is closed structurally — there is nothing to exploit.
+- **Externally-issued e-ticket (v2):** a World Cup e-ticket is an off-chain fact (a transfer code, a FIFA/Ticketmaster account transfer, a barcode) we cannot cryptographically escrow or make preimage-gated. Here the legs are *not* atomic and every cheat exploits the gap — this is the case 2-of-3 escrow + arbitration exists to handle.
+
+The cheats below (A, B) describe the **externally-issued** case. **For the tokenized fan-pass, cheats A and B do not exist:** the seller cannot take payment without revealing `S`, and revealing `S` is exactly what hands the buyer the pass.
 
 ### Cheat A — Seller takes the USD₮ and never delivers the ticket
 Buyer pays; seller disappears (or hands over an already-used / fake ticket). This is the dominant fraud in fan-ticket resale.
@@ -22,7 +29,8 @@ Buyer pays; seller disappears (or hands over an already-used / fake ticket). Thi
 Buyer gets a valid transfer code, then claims "nothing arrived" to get the money back, or (on a chargeback-capable rail) reverses the payment. USD₮ on-chain has **no chargeback**, which already kills the pure-reversal version of this — but the "claims non-receipt" dispute version survives and must be adjudicated.
 
 ### What Terrace CAN guarantee
-1. **Custody safety.** Terrace holds no keys and no funds. Escrowed USD₮ can only move by a 2-of-3 signature quorum. A compromise of Terrace's code, a shut-down laptop, or a malicious operator cannot steal funds. (Directly answers "who holds the USD₮": a contract, governed by keys the two traders and an arbitrator hold — not us.)
+0. **Atomic delivery-vs-reveal for the tokenized fan-pass (SHIPPED, tested).** For a Terrace-issued pass, the ledger's `apply()` accepts a fan-pass settlement **only if it reveals a preimage `S` that hashes to the listing's published `H`** — and `H` is read from the *listing*, not from the settling op, so a settler cannot pick their own lock. Wrong or missing preimages are **rejected** (there is a test that proves it). Since that same `S` is the only key that decrypts the P2P-replicated pass, the seller literally cannot reach "settled/paid" without publishing the one secret that unlocks the pass for the buyer. No party holds funds; the cheat is removed *structurally*, not adjudicated after the fact. This is the honest answer to "who holds the USD₮ / what stops a cheat" for the tokenized-pass path — and the payment leg it sits on remains a labeled mock (v2 wires it to real WDK USD₮; the atomic structure is what makes that safe).
+1. **Custody safety (external-ticket path, v2).** Terrace holds no keys and no funds. Escrowed USD₮ can only move by a 2-of-3 signature quorum. A compromise of Terrace's code, a shut-down laptop, or a malicious operator cannot steal funds. (Answers "who holds the USD₮" for externally-issued tickets: a contract, governed by keys the two traders and an arbitrator hold — not us.)
 2. **No unilateral theft of locked funds.** Once buyer funds escrow, the seller cannot pull the USD₮ without buyer's release **or** an arbitrator ruling. This defeats the naive version of Cheat A (take-money-and-run) because there is nothing to take until release.
 3. **Tamper-evident, non-repudiable record.** Every state transition (listing → offer → accept → fund → deliver-claim → release/dispute) is written to a co-signed Autobase ledger. Neither party can later forge, delete, or reorder what was agreed. Disputes are adjudicated against an append-only shared history, not "he-said-she-said."
 4. **No payment reversal.** USD₮ settlement is final; the chargeback flavour of Cheat B is structurally impossible.
@@ -41,21 +49,27 @@ Buyer gets a valid transfer code, then claims "nothing arrived" to get the money
 
 Scoring axes: **1-week feasibility** (can a 2–3 person team ship + demo it), **credibility** (does it survive a Bisq/RoboSats comparison), **honesty** (can we describe it without overclaiming custody).
 
-### (a) On-chain 2-of-3 multisig / smart-contract escrow with a P2P arbitrator
-Buyer deposits USD₮ into an escrow contract keyed to `{buyer, seller, arbitrator}`. Release requires **any 2 of 3** signatures. Happy path: buyer + seller co-sign release. Dispute path: arbitrator + the honest party co-sign release-or-refund.
+### (a) On-chain 2-of-3 multisig / smart-contract escrow with a P2P arbitrator — the v2 path for *externally-issued* tickets
+This is the right answer for the case atomicity can't reach: an asset Terrace does **not** issue (a real FIFA/Ticketmaster e-ticket), which cannot be preimage-gated. Buyer deposits USD₮ into an escrow contract keyed to `{buyer, seller, arbitrator}`. Release requires **any 2 of 3** signatures. Happy path: buyer + seller co-sign release. Dispute path: arbitrator + the honest party co-sign release-or-refund.
 
 - **Feasibility (1wk):** Medium-high. A minimal escrow is ~120 lines of Solidity on Sepolia, or a 2-of-3 policy on a WDK ERC-4337 smart account (`@tetherto/wdk-wallet-evm-erc-4337`). Well-trodden; audited references abound (Bisq/HodlHodl are exactly this pattern). Main cost is arbitrator UX + on-chain demo choreography.
-- **Credibility:** **Highest.** This *is* the Bisq/HodlHodl model. It's the answer Guy Swann is fishing for. "Who holds the USD₮?" → "A 2-of-3 escrow contract. Not us, not either party alone."
+- **Credibility:** **Highest for externally-issued tickets.** This *is* the Bisq/HodlHodl model. "Who holds the USD₮ for a real ticket resale?" → "A 2-of-3 escrow contract. Not us, not either party alone."
 - **Honesty:** Clean. We only claim what 2-of-3 gives (no unilateral theft; bounded arbitrator trust). No overclaim.
-- **Weakness:** Reintroduces an arbitrator trust assumption; needs the ticket-delivery oracle handled off-chain via evidence.
+- **Weakness:** Reintroduces an arbitrator trust assumption + a ticket-delivery oracle — precisely the trust that the **shipped tokenized-pass HTLC (b) eliminates** when Terrace issues the asset. Escrow is the fallback for assets we don't control, not the headline.
 
-### (b) HTLC / hash-locked settlement
-Lock USD₮ behind a hash `H`; funds release only when the preimage `S` is revealed on-chain, with a timelock refund. Genuinely atomic **iff the thing being bought is itself the secret `S`** — i.e. the ticket redemption requires exactly `S` and `S` is obtainable no other way (atomic-swap / Lightning-style).
+### (b) HTLC / hash-locked settlement for a Terrace-tokenized fan-pass — ✅ SHIPPED v1
+Lock the settlement behind a hashlock `H`; the trade only reaches settled when the preimage `S` is revealed, where `generichash(S) == H`. Genuinely atomic **iff the thing being bought is itself the secret `S`** — and for a **Terrace-issued fan-pass, it is**, because Terrace controls the asset and mints it *as* a preimage-gated secret. This is exactly what we built.
 
-- **Feasibility (1wk):** Medium for the contract; **the blocker is the ticket.** A FIFA/Ticketmaster e-ticket is not a preimage-gated asset — you cannot make ticket redemption require an arbitrary `S`. HTLC only becomes atomic if we *tokenize the ticket* (mint the transfer code as an NFT / redeemable secret we control), which we do not control for real World Cup inventory.
-- **Credibility:** High *in theory* and rhetorically strong (RoboSats/Lightning lineage). But a judge will immediately ask "how does revealing the preimage deliver a real FIFA ticket?" and we'd have no honest answer for real inventory.
-- **Honesty risk:** **High.** Demoing HTLC on two on-chain assets and implying it makes *real ticket delivery* atomic would be misleading. Only honest if we clearly scope it to "tokenized/self-issued tickets."
-- **Verdict:** Excellent **v2** story for a *Terrace-native tokenized ticket* (see roadmap). Not an honest v1 for real fan tickets.
+**How the shipped version works (matches the code):**
+- The seller issues a pass via `publishListing({ ..., passSecret })`. Terrace generates `S`, secretbox-encrypts the pass payload under `S`, and delivers the ciphertext peer-to-peer over a **dedicated Hypercore blob** (2nd Holepunch primitive) replicated across the same swarm. **Only `H = generichash(S)` and the ciphertext reference go on the ledger — never `S`.**
+- `apply()` accepts a fan-pass settlement **only if the settling op reveals an `S` such that `generichash(S)` equals the listing's `H`.** `H` is read from the *listing*, not the settling op, so the settler cannot substitute their own lock. Wrong/missing-preimage settlements are **REJECTED** (tested).
+- `S` is the ONLY key that decrypts the replicated ciphertext. So the seller cannot reach settled without revealing `S`, and revealing `S` is exactly what unlocks the pass for the buyer.
+- New API surface: `getPass(tradeId) → { hasPass, locked, revealed, pass }`; `getReceipt` now carries `hashlock`, `revealed`, and `passUnlocked`.
+
+- **Feasibility:** Shipped and green under `npm test`. No arbitrator infra, no Solidity, no oracle — because Terrace issues the asset, "is this pass real" is not an external question.
+- **Credibility:** **High and now demonstrable** (RoboSats/Lightning lineage, but running). "Who holds the USD₮?" → "Nobody — for a tokenized pass the swap is atomic; the seller can't get paid without handing over the secret that unlocks the pass."
+- **Honesty boundary (must state every time):** the **atomicity of delivery-vs-reveal is real and tested; the payment rail is still a labeled mock.** We do NOT claim real on-chain USD₮ settlement yet. Only claim: the structure is atomic, so wiring the mock payment leg to real testnet USD₮ / WDK (v2) is safe.
+- **Verdict:** **This is the shipped v1 answer** for Terrace-issued assets — no arbitrator, no oracle. Externally-issued tickets, which can't be preimage-gated, fall back to option (a) 2-of-3 escrow (v2).
 
 ### (c) Co-signed Autobase ledger + external USD₮ settlement leg
 The Autobase ledger is the tamper-evident record of intent/offer/accept/dispute; settlement is a **real USD₮ testnet transfer** peer-to-peer (WDK self-custodial), with the tx hash written back as settlement proof.
@@ -75,20 +89,22 @@ Peers post a refundable USD₮ bond; trade outcomes (signed, ledger-anchored) bu
 
 ### Recommendation
 
-**v1 (what we build and demo): (a) 2-of-3 escrow contract on Sepolia holding test USD₮, coordinated and audit-trailed by the (c) Autobase co-signed ledger, with a minimal (d) reputation/stake layer.**
+**v1 (SHIPPED and demoed): (b) HTLC atomic swap for a Terrace-issued tokenized fan-pass** — no arbitrator, no oracle, no funds held by anyone — **coordinated and audit-trailed by the (c) Autobase co-signed ledger, with a minimal (d) reputation/stake layer.** The tokenized-pass path is the headline because Terrace issues the asset, so the swap is genuinely atomic and there is nothing to adjudicate.
 
-This is the honest, credible, buildable-in-a-week combination:
-- **(a)** gives the real answer to "who holds the USD₮" and directly matches the Bisq/HodlHodl bar.
-- **(c)** is the serverless, Pears-native differentiator — the tamper-evident shared record that no centralized exchange has and that makes arbitration evidence-based.
-- **(d)** raises the cost of the residual (arbitrated) attacks.
+This is the honest, credible, *already-running* combination:
+- **(b)** gives the strongest possible answer to "who holds the USD₮ / what stops a cheat" for a Terrace-issued asset: **nobody holds it, and the atomic swap stops the cheat structurally** — the seller can't get paid without revealing the secret that unlocks the pass. Real and tested; the payment leg it rides on is still a labeled mock.
+- **(c)** is the serverless, Pears-native differentiator — the tamper-evident shared record that no centralized exchange has, and the layer that binds `H` to the listing so a settler can't pick their own lock.
+- **(d)** raises the cost of residual attacks on the external-ticket path.
 
-**Honest fallback if the escrow contract or arbitrator UX slips before demo day:** ship **(c)+(d)** and *relabel truthfully* — "Terrace v1 is a self-custodial P2P settlement layer with a tamper-evident co-signed ledger and reputation staking; on-chain 2-of-3 escrow is the next milestone." Never demo (c) while *saying* "escrow." The whole submission's integrity rides on that distinction.
+**v2 (for the case atomicity can't reach — *externally-issued* tickets): (a) 2-of-3 escrow on Sepolia holding test USD₮.** A real FIFA/Ticketmaster e-ticket can't be preimage-gated, so it can't ride the atomic swap; there, escrow + arbitration is the honest model (the Bisq/HodlHodl bar). This is the natural next milestone, not the v1 headline.
+
+**Honest boundary that never moves:** the **atomicity** of the tokenized-pass swap is real and tested; the **USD₮ payment rail is a labeled mock** in both v1 and until the WDK leg lands. Never imply real on-chain USD₮ settlement, and never demo direct A→B settlement while *saying* "escrow." The whole submission's integrity rides on those two distinctions.
 
 **v2 roadmap (say this out loud as the vision):**
-1. **Bonded, selectable arbitrators** — arbitrators post stake, are chosen per-trade, and are slashable for provable collusion (moves us from "trust our arbitrator" toward HodlHodl's marketplace of arbitrators).
-2. **HTLC atomic settlement for Terrace-native tokenized tickets (b)** — for inventory Terrace itself issues/controls (season-pass style, or partner integrations), make money↔ticket a true atomic swap. This is the only path to *actually* atomic delivery and it's an honest, bounded claim.
+1. **Wire the mock payment leg to real testnet USD₮ / WDK** — the atomic-swap structure is exactly what makes moving from mock to real settlement safe: the reveal already gates delivery, so binding it to an on-chain USD₮ release is a drop-in.
+2. **2-of-3 escrow for externally-issued tickets (a)**, with **bonded, selectable, slashable arbitrators** — for inventory Terrace does not control, where the atomic swap is impossible.
 3. **N-of-M / threshold escrow** and cross-chain USD₮ via **USDT0** so settlement can ride Plasma's zero-fee USD₮ transfers or other chains.
-4. **Ticketing-oracle integrations** (FIFA/Ticketmaster transfer-confirmation webhooks) to shrink the "did the ticket really arrive" arbitration surface.
+4. **Ticketing-oracle integrations** (FIFA/Ticketmaster transfer-confirmation webhooks) to shrink the "did the ticket really arrive" arbitration surface on the external-ticket path.
 
 ---
 
@@ -214,37 +230,40 @@ A `DISPUTE` entry flips the trade to `DISPUTED` and (per the `ACCEPT` terms) adm
 The escrow story survives judge scrutiny **only if the on-camera claims are exactly true.** Script the claims.
 
 ### ✅ Say on camera (true for v1)
-- "Terrace is **serverless** — Hyperswarm for peer discovery, an Autobase co-signed ledger for shared state. No backend, no database, no operator custody."
-- "**Terrace never holds funds or keys.** Every peer has a self-custodial wallet built on **Tether's own WDK**."
-- "USD₮ is escrowed in a **2-of-3 contract** keyed to buyer, seller, and an arbitrator. **Release needs 2 of 3 signatures** — neither party, nor Terrace, can move it alone." *(Only if the contract ships. If not, see fallback.)*
-- "Here is a **real USD₮ transfer on Ethereum Sepolia** — this tx hash, verifiable on Etherscan — recorded back into the ledger as settlement proof." *(Show the Etherscan tab.)*
-- "Every step — listing, offer, accept, funding, delivery, dispute — is a **signed, tamper-evident entry** in the shared ledger. Disputes are judged against an **immutable shared history**, not screenshots."
-- "This is the **Bisq/HodlHodl escrow model**, made serverless on Holepunch and settled in USD₮."
+- "For a **Terrace-issued fan-pass, the swap is atomic**: the ledger won't record settlement unless it reveals a secret `S` that hashes to the lock `H` on the listing, and that same `S` is the only key that decrypts the pass we replicated peer-to-peer. **The seller can't get paid without handing over the secret that unlocks the pass** — no escrow, no arbitrator, no oracle. This is shipped and there's a test that rejects a wrong preimage." *(Then add the honesty gate below.)*
+- "The **atomicity is real and tested. The payment leg is still a labeled mock** — no real USD₮ moves on-chain yet. Wiring it to real WDK USD₮ is v2, and the atomic structure is exactly what makes that safe."
+- "Terrace is **serverless** — Hyperswarm for peer discovery, an Autobase co-signed ledger for shared state, and a Hypercore blob that carries the encrypted pass peer-to-peer. No backend, no database, no operator custody."
+- "**Terrace never holds funds or keys.** For the tokenized pass, nobody holds funds at all — the atomic swap means there's nothing to custody."
+- "Every step — listing, offer, accept, and the settlement that reveals the preimage — is a **signed, tamper-evident entry** in the shared ledger. The receipt shows the pass going **LOCKED → UNLOCKED** the instant the secret is revealed."
+
+### 🔜 Say as roadmap (v2 — do NOT present as shipped)
+- "For **externally-issued** tickets we can't tokenize, v2 is the **Bisq/HodlHodl 2-of-3 escrow model** on Sepolia via **Tether's WDK**, settled in real test USD₮ with an Etherscan-verifiable tx hash. That's the immediate next milestone; the atomic swap we shipped is what proves the delivery-vs-reveal structure that escrow will settle against."
 
 ### ⚠️ Explicitly frame as bounded (say the honest limit before the judge does)
-- "Escrow stops the *take-the-money-and-run* attack. It does **not** prove a ticket is genuine — that's an **oracle problem**, resolved by the arbitrator using the ledger's evidence trail. Same honest position Bisq and HodlHodl take."
-- "v1 uses **one designated arbitrator** — a bounded 2-of-3 trust assumption. **Bonded, selectable, slashable arbitrators are on the roadmap.**"
+- "The atomic swap works because **Terrace issues the pass**, so 'is this asset real' isn't an external question. For a **real, externally-issued** FIFA ticket that we can't tokenize, atomicity is impossible — that's the **oracle problem**, and the v2 answer is 2-of-3 escrow + arbitration (the Bisq/HodlHodl position), not the atomic swap."
+- "The v1 **payment leg is a labeled mock** — atomicity of delivery-vs-reveal is what's proven, not on-chain USD₮ movement. Real WDK USD₮ is the immediate next milestone."
 
 ### 🚫 Do NOT claim (would be a lie / overclaim)
-- ❌ "Trustless" *ticket delivery* or fully *atomic* money↔ticket swap. (Not true for real, non-tokenized FIFA tickets — only for the v2 tokenized-ticket HTLC path.)
-- ❌ "No trust required anywhere." (The arbitrator is a bounded trust assumption. Say so.)
-- ❌ Any implication that Terrace guarantees the ticket scans at the gate.
-- ❌ Presenting direct A→B settlement (the honest fallback) using the word **"escrow."**
+- ❌ **Real on-chain USD₮ settlement.** The payment rail is a labeled mock in v1. The atomic swap makes *delivery-vs-reveal* atomic; it does **not** move real USD₮ yet. Claim the atomicity, never the settlement.
+- ❌ Atomic money↔ticket swap for a **real, non-tokenized FIFA ticket.** The atomic swap is honest **only for a Terrace-issued fan-pass** (which we shipped). Externally-issued tickets can't be preimage-gated and fall back to v2 2-of-3 escrow.
+- ❌ "No trust required anywhere" on the external-ticket path. (There the arbitrator is a bounded trust assumption. Say so. The tokenized-pass path genuinely needs no arbitrator.)
+- ❌ Any implication that Terrace guarantees a real ticket scans at the gate.
+- ❌ Presenting direct A→B settlement (the external-ticket fallback) using the word **"escrow."**
 
-### Fallback script (if the 2-of-3 contract isn't ready by demo day)
-Ship (c)+(d) and say, truthfully:
-> "v1 demonstrates **self-custodial P2P USD₮ settlement** with a **tamper-evident co-signed ledger** and **reputation staking** — cheating is provable and reputation-costly. **On-chain 2-of-3 escrow is the immediate next milestone**; here is the contract design and interface." *(Then show the escrow design from §2a as the plan.)*
+### The one honesty script you must say (payment leg is mock, atomicity is real)
+Because the atomic swap is the headline, the seam a Bitcoin-savvy judge will probe is the payment rail — so name it first, truthfully:
+> "The **atomic swap is real and tested**: for a Terrace-issued pass, the ledger won't record settlement without revealing the secret that decrypts the pass, so delivery and payment are one indivisible act — no escrow, no arbitrator, no oracle. The **payment leg itself is a labeled mock** right now; no real USD₮ moves on-chain yet. Wiring it to real testnet USD₮ via Tether's WDK is v2, and the atomic structure is exactly what makes that drop-in safe. For a **real, externally-issued FIFA ticket** — which we can't tokenize — the answer is 2-of-3 escrow, also v2; here's the design." *(Then show §2a.)*
 
-This keeps the submission honest either way. The difference between "we built escrow" and "we designed escrow and built the settlement + ledger" is exactly the difference between a claim we can defend and one we cannot — and a Bitcoin-savvy judge will find the seam if we blur it.
+The difference between "the swap is atomic" (true, tested) and "we settle real USD₮" (not yet) is exactly the seam to keep crisp. Claim the atomicity; never imply the settlement.
 
-### v1 build checklist (1 week)
-- [ ] Pears app skeleton: Hyperswarm discovery + per-trade Autobase with `{buyer, seller}` writers.
-- [ ] Ledger entry types + state-machine validation (§4 table).
-- [ ] WDK EVM wallet per peer on Sepolia; test-USD₮ + gas from faucets (§3).
-- [ ] Settlement leg: `account.transfer()` → write `hash` back as `FUND`/`RELEASE` proof; independent on-chain re-verification.
-- [ ] **Stretch (headline):** minimal 2-of-3 escrow contract (Solidity on Sepolia *or* WDK ERC-4337 smart account); fund → 2-of-3 release; arbitrator dispute path.
-- [ ] Minimal reputation/stake: peer bond + trade count + slash-on-arbitrated-fault.
-- [ ] Demo choreography: happy path + one dispute path, both showing Etherscan proofs.
+### v1 build checklist
+- [x] Pears app skeleton: Hyperswarm discovery + per-trade Autobase with `{buyer, seller}` writers.
+- [x] Ledger entry types + author-enforced state-machine validation (§4 table).
+- [x] **HTLC atomic swap for a Terrace-issued tokenized fan-pass (headline):** `publishListing({...,passSecret})` mints `S`, secretbox-encrypts the pass, publishes only `H = generichash(S)` + ciphertext ref, replicates the ciphertext over a dedicated Hypercore blob; `apply()` rejects any settlement whose preimage doesn't hash to the listing's `H` (tested); `getPass(tradeId)` returns `{hasPass, locked, revealed, pass}`; `getReceipt` adds `hashlock`/`revealed`/`passUnlocked`.
+- [x] Labeled **mock** payment leg (atomicity real; on-chain USD₮ not yet).
+- [ ] **v2:** WDK EVM wallet per peer on Sepolia; real test-USD₮ leg wired into the reveal so settlement moves real USD₮ atomically (§3).
+- [ ] **v2 (external tickets):** minimal 2-of-3 escrow contract (Solidity on Sepolia *or* WDK ERC-4337 smart account); fund → 2-of-3 release; arbitrator dispute path.
+- [ ] **v2:** minimal reputation/stake: peer bond + trade count + slash-on-arbitrated-fault.
 
 ---
 
