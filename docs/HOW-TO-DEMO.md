@@ -180,7 +180,7 @@ The host also surfaces a copyable invite inside the app, so you don't strictly n
 Click flow:
 
 1. **Pick your nation** on the onboarding screen (e.g. Argentina on window 1, France on window 2).
-2. Choose **Host a new market** (window 1) or **Join with an invite** (window 2), then **Enter the swarm →**.
+2. Choose **Host a new market** (window 1) or **Join with an invite** (window 2, paste the invite), then click **Host the market →** / **Join the market →**.
 3. **Host copies** its invite from the app / terminal; **joiner pastes** it into the invite field. The joiner
    waits until it's authorized as a co-writer (the publish button unlocks the moment the host adds its key).
 4. On the host's **List a ticket** tab, fill the fixture / seat / price. Optionally flip **"🔒 Attach a
